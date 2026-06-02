@@ -6,6 +6,8 @@ import type * as Party from 'partykit/server'
 interface PlayerState {
   id: string
   name: string
+  avatar: string
+  slot: number
   x: number
   y: number
   z: number
@@ -14,6 +16,7 @@ interface PlayerState {
   health: number
   kills: number
   alive: boolean
+  joined: boolean
 }
 
 const SPAWN_MIN = 18
@@ -25,16 +28,31 @@ function spawnPoint(): { x: number; z: number } {
   return { x: Math.cos(a) * r, z: Math.sin(a) * r }
 }
 
+function avatarId(value: unknown): string {
+  const id = String(value ?? 'ranger')
+  return ['ranger', 'heavy', 'scout', 'medic'].includes(id) ? id : 'ranger'
+}
+
 export default class Arena implements Party.Server {
   players = new Map<string, PlayerState>()
 
   constructor(readonly room: Party.Room) {}
+
+  private nextSlot(): number {
+    const used = new Set([...this.players.values()].map((p) => p.slot))
+    for (let slot = 1; slot < 99; slot++) {
+      if (!used.has(slot)) return slot
+    }
+    return used.size + 1
+  }
 
   onConnect(conn: Party.Connection) {
     const sp = spawnPoint()
     const p: PlayerState = {
       id: conn.id,
       name: 'Player',
+      avatar: 'ranger',
+      slot: this.nextSlot(),
       x: sp.x,
       y: 1.8,
       z: sp.z,
@@ -43,10 +61,11 @@ export default class Arena implements Party.Server {
       health: 100,
       kills: 0,
       alive: true,
+      joined: false,
     }
     this.players.set(conn.id, p)
-    conn.send(JSON.stringify({ t: 'welcome', id: conn.id, players: [...this.players.values()] }))
-    this.room.broadcast(JSON.stringify({ t: 'join', player: p }), [conn.id])
+    const visiblePlayers = [...this.players.values()].filter((player) => player.id === conn.id || player.joined)
+    conn.send(JSON.stringify({ t: 'welcome', id: conn.id, players: visiblePlayers }))
   }
 
   onMessage(raw: string, sender: Party.Connection) {
@@ -61,7 +80,11 @@ export default class Arena implements Party.Server {
 
     if (m.t === 'join') {
       p.name = String(m.name ?? 'Player').slice(0, 16) || 'Player'
-      this.room.broadcast(JSON.stringify({ t: 'name', id: p.id, name: p.name }))
+      p.avatar = avatarId(m.avatar)
+      const wasJoined = p.joined
+      p.joined = true
+      if (!wasJoined) this.room.broadcast(JSON.stringify({ t: 'join', player: p }), [sender.id])
+      this.room.broadcast(JSON.stringify({ t: 'name', id: p.id, name: p.name, avatar: p.avatar, slot: p.slot }))
     } else if (m.t === 'state') {
       p.x = Number(m.x) || 0
       p.y = Number(m.y) || 1.8

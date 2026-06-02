@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Game } from './game/Game'
 import type { HUDState } from './game/types'
 import { HUD } from './components/HUD'
 import { audio } from './audio/AudioEngine'
+import type { PlayerAvatarId } from './net/playerAvatars'
 import {
   clearScores,
   loadScores,
@@ -34,6 +35,9 @@ const INITIAL_STATE: HUDState = {
   time: 0,
   wave: 1,
   totalWaves: TOTAL_WAVES,
+  campaignStage: 1,
+  campaignTotalStages: 0,
+  mapName: 'Foundry',
   bossActive: false,
   bossHealthFrac: 0,
   outcome: null,
@@ -50,6 +54,7 @@ const INITIAL_STATE: HUDState = {
   bannerSeq: 0,
   toast: '',
   toastSeq: 0,
+  damageNumbers: [],
   multiplayer: false,
   connected: false,
   room: '',
@@ -71,6 +76,15 @@ export default function App() {
   const [shop, setShop] = useState<ShopState>(() => loadShop())
   const [lastRunGold, setLastRunGold] = useState(0)
   const savedRef = useRef(false)
+  // A shared link like `?room=ARENA-AB12` lands the player on the join screen.
+  const initialRoom = useMemo(
+    () => (new URLSearchParams(window.location.search).get('room') || '').toUpperCase().slice(0, 24),
+    [],
+  )
+  const setRoomInUrl = useCallback((room: string) => {
+    const url = room ? `${window.location.pathname}?room=${encodeURIComponent(room)}` : window.location.pathname
+    window.history.replaceState(null, '', url)
+  }, [])
 
   useEffect(() => {
     const container = containerRef.current
@@ -152,14 +166,21 @@ export default function App() {
     })
   }, [])
   const handleClearScores = useCallback(() => setScores(clearScores()), [])
-  const handleStartMultiplayer = useCallback((name: string, room: string) => {
+  const handleStartMultiplayer = useCallback(
+    (name: string, room: string, avatar: PlayerAvatarId) => {
+      audio.unlock()
+      setRoomInUrl(room)
+      gameRef.current?.startMultiplayer(room, name, avatar)
+    },
+    [setRoomInUrl],
+  )
+  const handleLeaveRoom = useCallback(() => {
+    setRoomInUrl('')
+    gameRef.current?.leaveMultiplayer(true)
+  }, [setRoomInUrl])
+  const handleStartCampaign = useCallback((mapId?: string) => {
     audio.unlock()
-    gameRef.current?.startMultiplayer(room, name)
-  }, [])
-  const handleLeaveRoom = useCallback(() => gameRef.current?.leaveMultiplayer(true), [])
-  const handleStartCampaign = useCallback(() => {
-    audio.unlock()
-    gameRef.current?.startCampaign()
+    gameRef.current?.startCampaign(mapId)
   }, [])
   const handleStartSurvivors = useCallback(() => {
     audio.unlock()
@@ -169,7 +190,10 @@ export default function App() {
     audio.unlock()
     gameRef.current?.pickUpgrade(id)
   }, [])
-  const handleMenu = useCallback(() => gameRef.current?.returnToMenu(), [])
+  const handleMenu = useCallback(() => {
+    setRoomInUrl('')
+    gameRef.current?.returnToMenu()
+  }, [setRoomInUrl])
   const handleBuyShop = useCallback((id: string) => {
     setShop((prev) => {
       const def = SHOP_BY_ID[id as ShopId]
@@ -188,7 +212,7 @@ export default function App() {
   }, [])
 
   return (
-    <div className="game-root" ref={containerRef}>
+    <div className="game-root fixed inset-0 w-screen h-screen" ref={containerRef}>
       <HUD
         state={hud}
         scores={scores}
@@ -207,6 +231,7 @@ export default function App() {
         shop={shop}
         lastRunGold={lastRunGold}
         onBuyShop={handleBuyShop}
+        initialRoom={initialRoom}
       />
     </div>
   )

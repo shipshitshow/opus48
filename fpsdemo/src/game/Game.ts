@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js'
 import { audio } from '../audio/AudioEngine'
 import { NetClient, type RemotePlayerInfo } from '../net/NetClient'
+import type { PlayerAvatarId } from '../net/playerAvatars'
 import { RemoteAvatar } from '../net/RemoteAvatar'
 import { Enemy, type EnemyShot } from './Enemy'
 import {
@@ -46,6 +47,8 @@ import {
   PROJECTILE_HIT_RADIUS,
   PROJECTILE_TTL,
   RELOAD_TIME,
+  STAGE_CLEAR_HEAL,
+  STAGE_DIFFICULTY_STEP,
   STARTING_WEAPON,
   TOTAL_WAVES,
   WALL_HEIGHT,
@@ -59,6 +62,14 @@ import {
   type WeaponId,
 } from './constants'
 import { ARENA_TEXTURES, PICKUP_SPRITE_TEXTURES, PROJECTILE_SPRITE_TEXTURES, WEAPON_SPRITE_TEXTURES } from './spriteAssets'
+import {
+  CAMPAIGN_ORDER,
+  DEFAULT_MAP_ID,
+  campaignSequence,
+  getMap,
+  type ArenaMap,
+  type ObstacleMat,
+} from './maps'
 import {
   BOLT_DMG,
   BOLT_SPEED,
@@ -125,7 +136,7 @@ const WEAPON_SPRITE_CONFIG: Record<WeaponId, {
 }
 
 const PICKUP_COLORS: Record<PickupKind, number> = {
-  health: 0x39d353,
+  health: 0xff4d6d,
   ammo: 0x35e0ff,
   damage: 0xff7a1a,
   rifle: 0x00d8ff,
@@ -179,6 +190,16 @@ export class Game {
   private raycastTargets: THREE.Object3D[] = []
   private raycaster = new THREE.Raycaster()
   private screenCenter = new THREE.Vector2(0, 0)
+  // Arena (rebuildable per map): all meshes/materials/textures created by
+  // buildArena, tracked so clearArena can swap maps without leaking.
+  private accentA!: THREE.PointLight
+  private accentB!: THREE.PointLight
+  private arenaObjects: THREE.Mesh[] = []
+  private arenaMaterials: THREE.Material[] = []
+  private arenaTextures: THREE.Texture[] = []
+  private currentMap: ArenaMap = getMap(DEFAULT_MAP_ID)
+  private campaignMaps: ArenaMap[] = []
+  private campaignStage = 0 // 0-based index into campaignMaps
 
   // Weapon view model
   private weapon!: THREE.Group
@@ -247,6 +268,7 @@ export class Game {
   private connected = false
   private roomName = ''
   private playerName = 'Player'
+  private playerAvatar: PlayerAvatarId = 'ranger'
   private remotePlayers = new Map<string, RemoteAvatar>()
   private _euler = new THREE.Euler(0, 0, 0, 'YXZ')
 
@@ -293,6 +315,8 @@ export class Game {
   private headshotSeq = 0
   private killSeq = 0
   private damageSeq = 0
+  private damageNumbers: { id: number; x: number; y: number; amount: number; kind: 'normal' | 'head' | 'crit'; t: number }[] = []
+  private damageNumberId = 0
   private banner = ''
   private bannerSeq = 0
   private toast = ''
@@ -316,7 +340,7 @@ export class Game {
   start() {
     this.setupRenderer()
     this.setupScene()
-    this.buildArena()
+    this.buildArena(getMap(DEFAULT_MAP_ID))
     this.buildWeapon()
     this.bindEvents()
 
@@ -370,32 +394,87 @@ export class Game {
     this.scene.add(sun)
     this.scene.add(sun.target)
 
-    const accentA = new THREE.PointLight(0x00d8ff, 60, 90, 2)
-    accentA.position.set(-28, 8, -28)
-    this.scene.add(accentA)
-    const accentB = new THREE.PointLight(0xff4d6d, 60, 90, 2)
-    accentB.position.set(28, 8, 28)
-    this.scene.add(accentB)
+    // Two coloured rim lights — recoloured/repositioned per map by buildArena.
+    this.accentA = new THREE.PointLight(0x00d8ff, 60, 90, 2)
+    this.accentA.position.set(-28, 8, -28)
+    this.scene.add(this.accentA)
+    this.accentB = new THREE.PointLight(0xff4d6d, 60, 90, 2)
+    this.accentB.position.set(28, 8, 28)
+    this.scene.add(this.accentB)
   }
 
-  private buildArena() {
-    const floorTex = this.makeRepeatingTexture(ARENA_TEXTURES.floor, ARENA_HALF / 3.5, ARENA_HALF / 3.5)
+  /** Tear down the current arena (meshes, materials, textures) so a new map can
+   *  be built in its place. Leaves enemies, pickups, and the player untouched. */
+  private clearArena() {
+    for (const o of this.arenaObjects) {
+      this.scene.remove(o)
+      o.geometry.dispose()
+    }
+    for (const m of this.arenaMaterials) m.dispose()
+    for (const t of this.arenaTextures) t.dispose()
+    // Strip the old arena solids from the shooting targets, keeping enemy hit
+    // meshes (solidMeshes only ever holds arena geometry).
+    if (this.solidMeshes.length) {
+      const solidSet = new Set<THREE.Object3D>(this.solidMeshes)
+      this.raycastTargets = this.raycastTargets.filter((o) => !solidSet.has(o))
+    }
+    this.arenaObjects = []
+    this.arenaMaterials = []
+    this.arenaTextures = []
+    this.solidMeshes = []
+    this.obstacleBoxes = []
+  }
 
-    const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(ARENA_HALF * 2, ARENA_HALF * 2),
-      new THREE.MeshStandardMaterial({ map: floorTex, color: 0xffffff, roughness: 0.9, metalness: 0.08 }),
-    )
+  /** Build (or rebuild) the arena from a map definition: theme + boundary walls
+   *  + interior obstacles. All campaign maps share the 80x80 footprint. */
+  private buildArena(map: ArenaMap) {
+    this.clearArena()
+    this.currentMap = map
+    const t = map.theme
+
+    // --- theme: background, fog, rim lights ---
+    const bg = new THREE.Color(t.bg)
+    this.scene.background = bg
+    if (this.scene.fog instanceof THREE.Fog) {
+      this.scene.fog.color.copy(bg)
+      this.scene.fog.near = t.fogNear
+      this.scene.fog.far = t.fogFar
+    } else {
+      this.scene.fog = new THREE.Fog(bg.getHex(), t.fogNear, t.fogFar)
+    }
+    this.accentA.color.setHex(t.accentA.color)
+    this.accentA.position.set(t.accentA.x, t.accentA.y, t.accentA.z)
+    this.accentB.color.setHex(t.accentB.color)
+    this.accentB.position.set(t.accentB.x, t.accentB.y, t.accentB.z)
+
+    // --- materials ---
+    const floorMat = new THREE.MeshStandardMaterial({
+      map: this.makeRepeatingTexture(ARENA_TEXTURES.floor, ARENA_HALF / 3.5, ARENA_HALF / 3.5),
+      color: t.floorTint, roughness: 0.9, metalness: 0.08,
+    })
+    const wallMat = new THREE.MeshStandardMaterial({
+      map: this.makeRepeatingTexture(ARENA_TEXTURES.wall, 16, 1),
+      color: t.wallTint, roughness: 0.65, metalness: 0.22,
+    })
+    const trimMat = new THREE.MeshStandardMaterial({ color: t.trim, emissive: t.trim, emissiveIntensity: 1.4 })
+    const crateMat = new THREE.MeshStandardMaterial({
+      map: this.makeRepeatingTexture(ARENA_TEXTURES.block, 1, 1),
+      color: t.wallTint, roughness: 0.72, metalness: 0.24,
+    })
+    const pillarMat = new THREE.MeshStandardMaterial({
+      map: this.makeRepeatingTexture(ARENA_TEXTURES.column, 1, 3),
+      color: t.wallTint, roughness: 0.58, metalness: 0.32,
+    })
+    this.arenaMaterials.push(floorMat, wallMat, trimMat, crateMat, pillarMat)
+
+    // --- floor ---
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(ARENA_HALF * 2, ARENA_HALF * 2), floorMat)
     floor.rotation.x = -Math.PI / 2
     floor.receiveShadow = true
     this.scene.add(floor)
+    this.arenaObjects.push(floor)
 
-    const wallMat = new THREE.MeshStandardMaterial({
-      map: this.makeRepeatingTexture(ARENA_TEXTURES.wall, 16, 1),
-      color: 0xffffff,
-      roughness: 0.65,
-      metalness: 0.22,
-    })
-    const trimMat = new THREE.MeshStandardMaterial({ color: 0x00d8ff, emissive: 0x00aacc, emissiveIntensity: 1.4 })
+    // --- boundary walls (+ neon trim) ---
     const span = ARENA_HALF * 2 + WALL_THICKNESS
     const wallDefs: Array<[number, number, number, number]> = [
       [0, -ARENA_HALF, span, WALL_THICKNESS],
@@ -411,53 +490,49 @@ export class Game {
       wall.userData = { solid: true }
       this.scene.add(wall)
       this.solidMeshes.push(wall)
+      this.arenaObjects.push(wall)
 
       const trim = new THREE.Mesh(new THREE.BoxGeometry(w, 0.18, d), trimMat)
       trim.position.set(x, WALL_HEIGHT + 0.05, z)
       this.scene.add(trim)
+      this.arenaObjects.push(trim)
     }
 
-    const crateMat = new THREE.MeshStandardMaterial({
-      map: this.makeRepeatingTexture(ARENA_TEXTURES.block, 1, 1),
-      color: 0xffffff,
-      roughness: 0.72,
-      metalness: 0.24,
-    })
-    const pillarMat = new THREE.MeshStandardMaterial({
-      map: this.makeRepeatingTexture(ARENA_TEXTURES.column, 1, 3),
-      color: 0xffffff,
-      roughness: 0.58,
-      metalness: 0.32,
-    })
-
-    const addBox = (x: number, z: number, w: number, h: number, d: number, mat: THREE.Material) => {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat)
-      m.position.set(x, h / 2, z)
-      m.castShadow = true
-      m.receiveShadow = true
-      m.userData = { solid: true }
-      this.scene.add(m)
-      this.solidMeshes.push(m)
-      this.obstacleBoxes.push(new THREE.Box3().setFromObject(m))
+    // --- interior obstacles ---
+    const matFor = (m: ObstacleMat) => (m === 'pillar' ? pillarMat : m === 'wall' ? wallMat : crateMat)
+    const groundTop = new Map<string, number>() // tracks box-top heights so stacks sit on top
+    for (const o of map.obstacles) {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(o.w, o.h, o.d), matFor(o.mat))
+      const key = `${o.x}:${o.z}`
+      let y = o.h / 2
+      if (o.elevated) {
+        y = (groundTop.get(key) ?? 0) + o.h / 2 // rest on the box below it
+      } else {
+        groundTop.set(key, o.h)
+      }
+      mesh.position.set(o.x, y, o.z)
+      mesh.castShadow = true
+      mesh.receiveShadow = true
+      mesh.userData = { solid: true }
+      this.scene.add(mesh)
+      this.solidMeshes.push(mesh)
+      this.arenaObjects.push(mesh)
+      // Elevated boxes are decorative silhouette — drawn + shootable, not colliders.
+      if (!o.elevated) this.obstacleBoxes.push(new THREE.Box3().setFromObject(mesh))
     }
-
-    const crates: Array<[number, number]> = [
-      [-12, -8], [12, -8], [-12, 8], [12, 8], [0, -18], [0, 18],
-    ]
-    for (const [x, z] of crates) addBox(x, z, 2.4, 2.4, 2.4, crateMat)
-
-    const stack = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2.2, 2.2), crateMat)
-    stack.position.set(-12, 2.4 + 1.1, -8)
-    stack.castShadow = true
-    stack.receiveShadow = true
-    stack.userData = { solid: true }
-    this.scene.add(stack)
-    this.solidMeshes.push(stack)
-
-    const pillars: Array<[number, number]> = [[-24, 0], [24, 0], [0, 0]]
-    for (const [x, z] of pillars) addBox(x, z, 2.0, WALL_HEIGHT, 2.0, pillarMat)
 
     this.raycastTargets.push(...this.solidMeshes)
+  }
+
+  /** Position the player at the current map's spawn, facing the arena centre. */
+  private placeAtSpawn() {
+    const s = this.currentMap.spawn
+    this.velocity.set(0, 0, 0)
+    this.canJump = false
+    this.camera.position.set(s.x, PLAYER_HEIGHT, s.z)
+    this.camera.rotation.set(0, 0, 0)
+    if (Math.abs(s.x) < 0.001 && Math.abs(s.z) < 0.001) this.camera.lookAt(0, PLAYER_HEIGHT, -10)
+    else this.camera.lookAt(0, PLAYER_HEIGHT, 0)
   }
 
   private makeRepeatingTexture(source: THREE.Texture, repeatX: number, repeatY: number): THREE.Texture {
@@ -466,6 +541,7 @@ export class Game {
     tex.repeat.set(repeatX, repeatY)
     tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy()
     tex.needsUpdate = true
+    this.arenaTextures.push(tex) // tracked so clearArena disposes the clone (not the shared source)
     return tex
   }
 
@@ -629,6 +705,11 @@ export class Game {
     this.announce(cleared >= TOTAL_WAVES ? 'FINAL WAVE CLEARED' : `WAVE ${cleared} CLEARED`)
   }
 
+  /** Per-stage difficulty scalar for the campaign (1.0 on stage 1, no effect elsewhere). */
+  private stageMul(): number {
+    return 1 + STAGE_DIFFICULTY_STEP * this.campaignStage
+  }
+
   private spawnWaveEnemy() {
     const wave = WAVES[this.waveIndex]
     const enemy = this.getFreeEnemy()
@@ -636,7 +717,7 @@ export class Game {
     const ranged = Math.random() < ENEMY_RANGED_CHANCE
     const color = ranged ? RANGED_COLOR : ENEMY_COLORS[(this.spawnedThisWave + this.waveIndex) % ENEMY_COLORS.length]
     enemy.spawnAt(pt.x, pt.z, {
-      maxHealth: ENEMY_MAX_HEALTH * wave.healthMul,
+      maxHealth: ENEMY_MAX_HEALTH * wave.healthMul * this.stageMul(),
       speed: (ENEMY_SPEED_MIN + Math.random() * (ENEMY_SPEED_MAX - ENEMY_SPEED_MIN)) * wave.speedMul,
       color,
       ranged,
@@ -648,8 +729,9 @@ export class Game {
   private spawnBoss() {
     const enemy = this.getFreeEnemy()
     const pt = this.randomSpawnPoint()
+    const bossHp = BOSS_HEALTH * this.stageMul()
     enemy.spawnAt(pt.x, pt.z, {
-      maxHealth: BOSS_HEALTH,
+      maxHealth: bossHp,
       isBoss: true,
       ranged: true,
       scale: BOSS_SCALE,
@@ -662,7 +744,7 @@ export class Game {
       projectileSpeed: BOSS_PROJECTILE_SPEED,
     })
     this.bossEnemy = enemy
-    this.bossMaxHealth = BOSS_HEALTH
+    this.bossMaxHealth = bossHp
   }
 
   private getFreeEnemy(): Enemy {
@@ -698,7 +780,7 @@ export class Game {
       this.spawnDeathPop(enemy.position.clone(), 0xff2d55, 2.4)
       this.bossActive = false
       this.bossEnemy = null
-      this.gameOver('win')
+      this.advanceCampaignOrWin()
     } else {
       this.score += ENEMY_SCORE + (headshot ? 50 : 0)
       this.reserve = Math.min(spec.reserveCap, this.reserve + spec.ammoPerKill)
@@ -727,8 +809,7 @@ export class Game {
     const group = new THREE.Group()
     const isWeapon = kind === 'rifle' || kind === 'smg' || kind === 'shotgun' || kind === 'cannon'
 
-    // The "icon" is child[0]: a billboarded weapon sprite for weapon drops,
-    // or a spinning gem for health / ammo / damage.
+    // The "icon" is child[0]: a billboarded sprite for pickups and weapon drops.
     let icon: THREE.Object3D
     if (isWeapon) {
       const mat = new THREE.SpriteMaterial({
@@ -740,6 +821,22 @@ export class Game {
       const sprite = new THREE.Sprite(mat)
       sprite.scale.set(1.5, 1.1, 1)
       sprite.position.y = 1.0
+      sprite.userData = { baseScale: [1.5, 1.1], baseY: 1.0 }
+      icon = sprite
+    } else if (kind === 'health' || kind === 'ammo' || kind === 'damage') {
+      const mat = new THREE.SpriteMaterial({
+        map: PICKUP_SPRITE_TEXTURES[kind],
+        transparent: true,
+        alphaTest: 0.04,
+        depthWrite: false,
+        toneMapped: false,
+      })
+      const sprite = new THREE.Sprite(mat)
+      const scale: [number, number] =
+        kind === 'health' ? [0.9, 1.0] : kind === 'ammo' ? [0.84, 1.0] : [0.8, 1.0]
+      sprite.scale.set(scale[0], scale[1], 1)
+      sprite.position.y = 0.95
+      sprite.userData = { baseScale: scale, baseY: 0.95 }
       icon = sprite
     } else {
       const gem = new THREE.Mesh(
@@ -748,6 +845,7 @@ export class Game {
       )
       gem.position.y = 0.9
       gem.castShadow = true
+      gem.userData = { baseY: 0.9 }
       icon = gem
     }
 
@@ -777,11 +875,14 @@ export class Game {
       const p = this.pickups[i]
       p.age += delta
       const icon = p.group.children[0]
-      const baseY = icon instanceof THREE.Sprite ? 1.0 : 0.9
+      const baseY = (icon.userData.baseY as number | undefined) ?? 0.9
       icon.position.y = baseY + Math.sin(p.age * 3) * 0.12
       if (icon instanceof THREE.Sprite) {
         const s = 1 + Math.sin(p.age * 4) * 0.06
-        icon.scale.set(1.5 * s, 1.1 * s, 1)
+        const baseScale = icon.userData.baseScale as [number, number] | undefined
+        const sx = baseScale?.[0] ?? 1
+        const sy = baseScale?.[1] ?? 1
+        icon.scale.set(sx * s, sy * s, 1)
       } else {
         icon.rotation.y += delta * 2.2
       }
@@ -879,6 +980,12 @@ export class Game {
   }
 
   private onKeyDown = (e: KeyboardEvent) => {
+    // While paused, Esc resumes the game (re-acquires pointer lock).
+    if (this.status === 'paused' && e.code === 'Escape') {
+      e.preventDefault()
+      this.requestLock()
+      return
+    }
     if (this.status !== 'playing') return
     switch (e.code) {
       case 'KeyW':
@@ -993,25 +1100,41 @@ export class Game {
     this.lockPointer()
   }
 
-  private lockPointer() {
+  private lockRetry = 0
+  private lockPointer(allowRetry = true) {
     try {
       const res: unknown = this.renderer.domElement.requestPointerLock()
-      if (res && typeof (res as Promise<void>).catch === 'function') (res as Promise<void>).catch(() => {})
+      if (res && typeof (res as Promise<void>).catch === 'function') {
+        ;(res as Promise<void>).catch(() => this.scheduleLockRetry(allowRetry))
+      }
     } catch {
-      /* pointer lock can legitimately fail; the HUD overlay simply stays up */
+      // Browsers impose a short cooldown after Esc exits pointer lock, during
+      // which requestPointerLock fails. Retry once after the cooldown clears.
+      this.scheduleLockRetry(allowRetry)
     }
+  }
+
+  private scheduleLockRetry(allowRetry: boolean) {
+    if (!allowRetry || this.status !== 'paused') return
+    window.clearTimeout(this.lockRetry)
+    this.lockRetry = window.setTimeout(() => {
+      if (this.status === 'paused') this.lockPointer(false)
+    }, 1300)
   }
 
   // -------------------------------------------------------------- multiplayer
 
   /** Join a PvP arena room. Disables the PvE campaign; players fight each other. */
-  startMultiplayer(room: string, name: string) {
+  startMultiplayer(room: string, name: string, avatar: PlayerAvatarId = 'ranger') {
     this.leaveMultiplayer(false) // tear down any prior session/avatars first
+    this.campaignStage = 0
+    this.buildArena(getMap(DEFAULT_MAP_ID)) // PvP always uses the default arena
     this.resetPlayer()
     this.multiplayer = true
     this.connected = false
     this.roomName = room
     this.playerName = name || 'Player'
+    this.playerAvatar = avatar
     this.kills = 0
 
     // Disable the PvE campaign.
@@ -1050,16 +1173,16 @@ export class Game {
           if (typeof health === 'number') r.setHealth(health)
         }
       },
-      onName: (id, nm) => {
+      onName: (id, nm, remoteAvatar, slot) => {
         const r = this.remotePlayers.get(id)
         if (r) {
-          r.setMeta(nm, r.kills)
+          r.setMeta(nm, r.kills, remoteAvatar, slot)
           this.emit()
         }
       },
       onHit: (msg) => this.onNetHit(msg),
     })
-    this.net.connect(room, this.playerName)
+    this.net.connect(room, this.playerName, this.playerAvatar)
 
     this.status = 'pointerlock-needed'
     this.emit()
@@ -1163,11 +1286,18 @@ export class Game {
     return PLAYER_MAX_HEALTH + this.statMaxHpBonus
   }
 
-  /** Enter the wave/boss campaign (explicit, from the menu). */
-  startCampaign() {
+  /**
+   * Enter the campaign (explicit, from the menu). The campaign is a journey
+   * through several maps starting at `startMapId` (the rest follow in order,
+   * wrapping). Each stage = that map's waves + boss; the final boss wins.
+   */
+  startCampaign(startMapId?: string) {
     this.leaveMultiplayer(false)
     this.survivors = false
     this.recomputeStats()
+    this.campaignMaps = campaignSequence(startMapId ?? CAMPAIGN_ORDER[0])
+    this.campaignStage = 0
+    this.buildArena(this.campaignMaps[0])
     this.resetPlayer()
     this.clearTransientFx()
     this.clearSurvivorsEntities()
@@ -1177,10 +1307,29 @@ export class Game {
     this.requestLock()
   }
 
+  /** Boss down: advance to the next campaign map, or win if this was the last. */
+  private advanceCampaignOrWin() {
+    if (this.campaignStage < this.campaignMaps.length - 1) {
+      this.campaignStage++
+      const next = this.campaignMaps[this.campaignStage]
+      this.health = Math.min(this.maxHealthValue, this.health + STAGE_CLEAR_HEAL)
+      this.buildArena(next)
+      this.clearTransientFx()
+      this.placeAtSpawn()
+      this.startWaveSystem()
+      this.announce(`STAGE ${this.campaignStage + 1}/${this.campaignMaps.length} · ${next.name.toUpperCase()}`)
+      this.emit()
+    } else {
+      this.gameOver('win')
+    }
+  }
+
   /** Enter Survivors mode (endless swarms + level-up draft). */
   startSurvivors() {
     this.leaveMultiplayer(false)
     this.survivors = true
+    this.campaignStage = 0
+    this.buildArena(getMap(DEFAULT_MAP_ID))
     this.resetPlayer()
     this.initSurvivorsRun()
     this.status = 'pointerlock-needed'
@@ -1396,7 +1545,9 @@ export class Game {
   private autoDamageEnemy(enemy: Enemy, dmg: number) {
     if (!enemy.alive) return
     const crit = this.statCrit > 0 && Math.random() < this.statCrit
-    const res = enemy.takeDamage(dmg * this.statDamageMul * (crit ? 2 : 1), false)
+    const total = dmg * this.statDamageMul * (crit ? 2 : 1)
+    const res = enemy.takeDamage(total, false)
+    this.addDamageNumber(enemy.position.clone().setY(1.6), total, crit ? 'crit' : 'normal')
     if (res.died) this.onEnemyDeath(enemy, false)
   }
 
@@ -1638,7 +1789,8 @@ export class Game {
     const elapsed = this.clock.elapsedTime
 
     if (this.status === 'playing') this.update(delta, elapsed)
-    else this.updateEffects(delta)
+    else if (this.status !== 'paused') this.updateEffects(delta)
+    // When paused, nothing simulates — the frame is just re-rendered as-is.
 
     this.emitAccumulator += delta
     if (this.emitAccumulator >= 0.1) {
@@ -1771,8 +1923,10 @@ export class Game {
       if (d > MELEE_RANGE + enemy.radius) continue
       if (d > 0.0001 && (ex * dirX + ez * dirZ) / d < MELEE_ARC_DOT) continue
       const crit = this.statCrit > 0 && Math.random() < this.statCrit ? 2 : 1
-      const res = enemy.takeDamage(MELEE_DAMAGE * dmgMul * crit, false)
+      const dmg = MELEE_DAMAGE * dmgMul * crit
+      const res = enemy.takeDamage(dmg, false)
       hitAny = true
+      this.addDamageNumber(enemy.position.clone().setY(1.6), dmg, crit > 1 ? 'crit' : 'normal')
       if (res.died) this.onEnemyDeath(enemy, false)
     }
 
@@ -1835,6 +1989,7 @@ export class Game {
           const dmg = spec.damage * dmgMult * (headshot ? HEADSHOT_MULTIPLIER : 1)
           this.net?.sendHit(ud.remoteId, dmg)
           endPoint = h.point.clone()
+          this.addDamageNumber(h.point, dmg, headshot ? 'head' : 'normal')
           if (headshot) {
             this.headshots++
             this.headshotSeq++
@@ -1851,6 +2006,7 @@ export class Game {
           const dmg = spec.damage * dmgMult * crit * (headshot ? HEADSHOT_MULTIPLIER : 1)
           const res = ud.enemy.takeDamage(dmg, headshot)
           endPoint = h.point.clone()
+          if (!res.blocked) this.addDamageNumber(h.point, dmg, headshot ? 'head' : crit > 1 ? 'crit' : 'normal')
           if (res.blocked) {
             this.hitMarkerSeq++ // shield ping (no damage)
             audio.sfx('shieldhit')
@@ -2155,9 +2311,7 @@ export class Game {
     this.reloadTimer = 0
     this.fireCooldown = 0
 
-    this.camera.position.set(0, PLAYER_HEIGHT, 6)
-    this.camera.rotation.set(0, 0, 0)
-    this.camera.lookAt(0, PLAYER_HEIGHT, -10)
+    this.placeAtSpawn()
 
     if (this.weapon) {
       this.weapon.position.set(WEAPON_VIEW_X, WEAPON_VIEW_Y, WEAPON_VIEW_Z)
@@ -2185,13 +2339,25 @@ export class Game {
     while (this.pickups.length) this.removePickup(this.pickups.length - 1)
   }
 
-  /** "Play Again" — replays the current mode. */
+  /** "Play Again" — replays the current mode (campaign restarts from stage 1). */
   restart() {
-    this.resetPlayer()
+    // PvP has no local "restart" — the server owns match state. A Restart click
+    // from a multiplayer pause must not reset stats / rebuild the arena under the
+    // live net session (that strands the player in a broken half-campaign state);
+    // treat it as a resume instead.
+    if (this.multiplayer) {
+      this.requestLock()
+      return
+    }
     this.clearTransientFx()
     if (this.survivors) {
+      this.resetPlayer()
       this.initSurvivorsRun()
     } else {
+      this.campaignStage = 0
+      if (!this.campaignMaps.length) this.campaignMaps = campaignSequence(CAMPAIGN_ORDER[0])
+      this.buildArena(this.campaignMaps[0])
+      this.resetPlayer()
       this.startWaveSystem()
     }
     this.status = 'pointerlock-needed'
@@ -2203,7 +2369,9 @@ export class Game {
   returnToMenu() {
     this.leaveMultiplayer(false)
     this.survivors = false
+    this.campaignStage = 0
     this.recomputeStats()
+    this.buildArena(getMap(DEFAULT_MAP_ID))
     this.resetPlayer()
     this.clearTransientFx()
     this.clearSurvivorsEntities()
@@ -2239,6 +2407,17 @@ export class Game {
     this.emit()
   }
 
+  private static readonly DAMAGE_NUMBER_TTL = 0.9
+  /** Spawn a floating damage number at a world position (projected to screen). */
+  private addDamageNumber(world: THREE.Vector3, amount: number, kind: 'normal' | 'head' | 'crit') {
+    const v = world.clone().project(this.camera)
+    if (v.z > 1) return // behind the camera — don't show
+    const x = (v.x * 0.5 + 0.5) * 100
+    const y = (-v.y * 0.5 + 0.5) * 100
+    this.damageNumbers.push({ id: ++this.damageNumberId, x, y, amount: Math.max(1, Math.round(amount)), kind, t: this.time })
+    if (this.damageNumbers.length > 40) this.damageNumbers.shift()
+  }
+
   // -------------------------------------------------------------------- state
 
   private get aliveCount(): number {
@@ -2249,6 +2428,10 @@ export class Game {
 
   private emit() {
     if (this.disposed) return
+    // Drop floating damage numbers once their CSS animation has finished.
+    if (this.damageNumbers.length) {
+      this.damageNumbers = this.damageNumbers.filter((d) => this.time - d.t < Game.DAMAGE_NUMBER_TTL)
+    }
     const spec = WEAPONS[this.activeWeapon]
     const weapons = WEAPON_ORDER.filter((id) => this.unlocked.has(id)).map((id) => ({
       id,
@@ -2272,6 +2455,9 @@ export class Game {
       time: Math.floor(this.time),
       wave: Math.min(this.waveIndex + 1, TOTAL_WAVES),
       totalWaves: TOTAL_WAVES,
+      campaignStage: this.campaignStage + 1,
+      campaignTotalStages: this.campaignMaps.length,
+      mapName: this.currentMap.name,
       bossActive: this.bossActive,
       bossHealthFrac: this.bossActive && this.bossEnemy && this.bossEnemy.alive ? this.bossEnemy.health / this.bossMaxHealth : 0,
       outcome: this.outcome,
@@ -2288,6 +2474,7 @@ export class Game {
       bannerSeq: this.bannerSeq,
       toast: this.toast,
       toastSeq: this.toastSeq,
+      damageNumbers: this.damageNumbers.map(({ t, ...d }) => d),
       multiplayer: this.multiplayer,
       connected: this.connected,
       room: this.roomName,

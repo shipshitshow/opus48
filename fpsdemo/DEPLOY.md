@@ -18,11 +18,22 @@ fps-arena.<your-username>.partykit.dev
 
 Copy that host — the front end needs it.
 
-Local dev server (for testing before deploy):
+Local dev (run the game **and** the room server together — this is what makes
+multiplayer work locally; `npm run dev` alone starts only the game):
 
 ```bash
+npm run dev:all             # vite (game) + partykit dev (rooms) together
+# or run them in two terminals:
 npm run party:dev           # ws server on http://127.0.0.1:1999
+npm run dev                 # game on http://localhost:5173
 ```
+
+In dev the client auto-targets `localhost:1999`. If multiplayer shows
+"○ connecting…" forever, the room server isn't running — use `npm run dev:all`.
+
+**Sharing a room:** joining sets the URL to `…/?room=CODE`. Send that link (or
+use the **Copy room link** button on the pause screen) and your friend lands on
+the join screen with the code prefilled.
 
 ## 2. Game front end (Vercel)
 

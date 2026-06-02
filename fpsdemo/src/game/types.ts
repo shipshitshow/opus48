@@ -39,6 +39,10 @@ export interface HUDState {
   /** 1-based wave number among the normal waves (clamped to TOTAL_WAVES). */
   wave: number
   totalWaves: number
+  /** Campaign multi-map journey: 1-based current stage, total stages, current map name. */
+  campaignStage: number
+  campaignTotalStages: number
+  mapName: string
   /** True while the boss is on the field. */
   bossActive: boolean
   /** 0..1 boss health fraction (only meaningful while bossActive). */
@@ -64,6 +68,8 @@ export interface HUDState {
   /** Small transient toast for pickups ("+ SHOTGUN", "+35 HP", ...). */
   toast: string
   toastSeq: number
+  /** Floating damage numbers, anchored to where the hit landed (screen %). */
+  damageNumbers: DamageNumber[]
   /** Multiplayer (PvP arena) state. */
   multiplayer: boolean
   connected: boolean
@@ -76,6 +82,15 @@ export interface HUDState {
   xpToNext: number
   build: BuildEntry[]
   choices: UpgradeChoice[]
+}
+
+export interface DamageNumber {
+  id: number
+  /** Screen position as a percentage of the viewport (0–100). */
+  x: number
+  y: number
+  amount: number
+  kind: 'normal' | 'head' | 'crit'
 }
 
 export interface ScoreboardEntry {

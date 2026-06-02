@@ -56,6 +56,13 @@ export const WAVES: WaveConfig[] = [
 ]
 export const TOTAL_WAVES = WAVES.length // boss arrives after the final wave
 
+// ---- Campaign (multi-map journey) -----------------------------------------
+// Each campaign stage runs the full WAVES + boss on a different map; clearing a
+// boss advances to the next map. Difficulty escalates per stage, and the player
+// is patched up a little between maps to reward the push forward.
+export const STAGE_DIFFICULTY_STEP = 0.22 // +22% enemy & boss health per stage
+export const STAGE_CLEAR_HEAL = 40 // HP restored when advancing to the next map
+
 export const FIRST_WAVE_DELAY = 2.2 // seconds before wave 1 spawns
 export const WAVE_BREAK = 3.2 // seconds between cleared waves
 export const WAVE_SPAWN_INTERVAL = 0.9 // seconds between staggered spawns within a wave

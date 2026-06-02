@@ -3,6 +3,8 @@ import PartySocket from 'partysocket'
 export interface RemotePlayerInfo {
   id: string
   name: string
+  avatar: string
+  slot: number
   x: number
   y: number
   z: number
@@ -27,7 +29,7 @@ export interface NetEvents {
   onJoin: (p: RemotePlayerInfo) => void
   onLeave: (id: string) => void
   onState: (id: string, x: number, y: number, z: number, yaw: number, weapon: string, health: number) => void
-  onName: (id: string, name: string) => void
+  onName: (id: string, name: string, avatar: string, slot: number) => void
   onHit: (msg: HitMessage) => void
   onStatus: (connected: boolean) => void
 }
@@ -46,11 +48,11 @@ export class NetClient {
     this.events = events
   }
 
-  connect(room: string, name: string, host: string = PARTYKIT_HOST) {
+  connect(room: string, name: string, avatar: string, host: string = PARTYKIT_HOST) {
     this.socket = new PartySocket({ host, room, party: 'main' })
     this.socket.addEventListener('open', () => {
       this.events.onStatus(true)
-      this.rawSend({ t: 'join', name })
+      this.rawSend({ t: 'join', name, avatar })
     })
     this.socket.addEventListener('close', () => this.events.onStatus(false))
     this.socket.addEventListener('message', (e: MessageEvent) => this.onMessage(e.data as string))
@@ -86,7 +88,7 @@ export class NetClient {
         )
         break
       case 'name':
-        this.events.onName(String(m.id), String(m.name))
+        this.events.onName(String(m.id), String(m.name), String(m.avatar ?? 'ranger'), Number(m.slot ?? 0))
         break
       case 'hit':
         this.events.onHit(m as unknown as HitMessage)

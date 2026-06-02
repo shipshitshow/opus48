@@ -13,6 +13,7 @@ import enemyRangedSideSpriteUrl from '../assets/sprites/enemy-ranged-side.webp'
 import bossProjectileSpriteUrl from '../assets/sprites/projectile-boss.webp'
 import enemyProjectileSpriteUrl from '../assets/sprites/projectile-enemy.webp'
 import ammoPickupSpriteUrl from '../assets/sprites/pickup-ammo.webp'
+import damagePickupSpriteUrl from '../assets/sprites/pickup-damage.webp'
 import healthPickupSpriteUrl from '../assets/sprites/pickup-health.webp'
 import cannonSpriteUrl from '../assets/sprites/weapon-cannon.webp'
 import rifleSpriteUrl from '../assets/sprites/weapon-rifle.webp'
@@ -64,6 +65,7 @@ export const PROJECTILE_SPRITE_TEXTURES = {
 export const PICKUP_SPRITE_TEXTURES = {
   health: loadSpriteTexture(healthPickupSpriteUrl),
   ammo: loadSpriteTexture(ammoPickupSpriteUrl),
+  damage: loadSpriteTexture(damagePickupSpriteUrl),
 } as const
 
 export const ARENA_TEXTURES = {
