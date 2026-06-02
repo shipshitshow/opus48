@@ -672,6 +672,7 @@ export class Game {
     this.removeProjectilesFrom(enemy)
 
     if (this.survivors) {
+      this.score += wasBoss ? 250 : 10
       this.spawnDeathPop(enemy.position.clone(), wasBoss ? 0xff2d55 : 0xffd166, wasBoss ? 2.0 : 0.8)
       this.dropXpGem(enemy.position.clone(), this.enemyXp.get(enemy) ?? SURV_XP_GEM_VALUE)
       this.reserve = Math.min(spec.reserveCap, this.reserve + 3) // keep the main gun fed
