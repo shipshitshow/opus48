@@ -176,7 +176,7 @@ function MultiplayerPanel({ onStart, initialRoom }: { onStart: (name: string, ro
               aria-pressed={selected}
             >
               <span
-                className={`relative flex h-[104px] w-full items-end justify-center overflow-hidden rounded-md border bg-black/35 ${
+                className={`relative flex h-[108px] w-full items-end justify-center overflow-hidden rounded-md border bg-black/35 ${
                   selected ? 'border-accent/60' : 'border-white/10'
                 }`}
               >
@@ -185,7 +185,7 @@ function MultiplayerPanel({ onStart, initialRoom }: { onStart: (name: string, ro
                 <img
                   src={AVATAR_PREVIEWS[option.id]}
                   alt=""
-                  className="relative z-[1] h-[118px] w-auto max-w-none object-contain [filter:drop-shadow(0_7px_7px_rgba(0,0,0,0.8))]"
+                  className="relative z-[1] h-[104px] w-auto max-w-none object-contain [filter:drop-shadow(0_7px_7px_rgba(0,0,0,0.8))]"
                   draggable={false}
                 />
                 {selected && (
