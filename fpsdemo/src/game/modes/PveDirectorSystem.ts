@@ -166,6 +166,7 @@ export class PveDirectorSystem {
       this.ctx.score += wasBoss ? 250 : 10
       this.sys.fx.spawnDeathPop(enemy.position.clone(), wasBoss ? 0xff2d55 : 0xffd166, wasBoss ? 2.0 : 0.8)
       this.sys.survivors.dropXpGem(enemy.position.clone(), this.sys.survivors.enemyXp.get(enemy) ?? SURV_XP_GEM_VALUE)
+      if (wasBoss) this.sys.survivors.onEliteKilled(enemy.position.clone()) // elites also drop health + damage
       // NOTE: no ammo on kill in Survivors — the sidearm is meant to run dry.
       return
     }

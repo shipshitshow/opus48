@@ -108,6 +108,7 @@ export class PlayerSystem {
     this.ctx.time = 0
     this.ctx.outcome = null
     this.ctx.damageBoostTimer = 0
+    this.sys.hud.clearBanner() // drop any stale terminal banner (e.g. "DEFEAT") so it can't re-flash next run
     this.ctx.firing = false
     this.ctx.triggerQueued = false
     this.ctx.velocity.set(0, 0, 0)

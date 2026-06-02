@@ -56,7 +56,7 @@ export const SURV_SPAWN_MIN = 0.26 // fastest spawn interval
 export const SURV_ELITE_INTERVAL = 28 // seconds between elite spawns
 export const SURV_ENEMY_BASE_HP = 32
 export const SURV_XP_GEM_VALUE = 1
-export const SURV_XP_ELITE_VALUE = 8
+export const SURV_XP_ELITE_VALUE = 18 // elites ("bosses") are a big XP payout
 
 // Auto-weapon tuning (indexed loosely by level)
 export const ORBIT_RADIUS = 2.6
@@ -74,7 +74,17 @@ export const NOVA_RADIUS = 6.5
 export const NOVA_INTERVAL = 3.2
 
 // ---- Shop: permanent meta-upgrades bought with gold between runs ----
-export type ShopId = 'might' | 'vigor' | 'swift' | 'regenP' | 'magnetP' | 'scholar' | 'greed' | 'arsenal'
+export type ShopId =
+  | 'might'
+  | 'vigor'
+  | 'swift'
+  | 'regenP'
+  | 'magnetP'
+  | 'scholar'
+  | 'greed'
+  | 'arsenal'
+  | 'munitions'
+  | 'pulsar'
 
 export interface ShopDef {
   id: ShopId
@@ -93,7 +103,10 @@ export const SHOP_UPGRADES: ShopDef[] = [
   { id: 'magnetP', name: 'Lodestone', desc: '+20% base pickup radius', icon: '🧲', max: 4, baseCost: 50 },
   { id: 'scholar', name: 'Scholar', desc: '+10% XP gained', icon: '📈', max: 4, baseCost: 70 },
   { id: 'greed', name: 'Greed', desc: '+12% gold earned per run', icon: '💰', max: 4, baseCost: 90 },
+  // --- Starting weapons: buy these to begin a run already armed (build variety) ---
   { id: 'arsenal', name: 'Arsenal', desc: 'Start every run with Orbiting Blades Lv1', icon: '🌀', max: 1, baseCost: 150 },
+  { id: 'munitions', name: 'Munitions', desc: 'Start every run with Seeker Bolts Lv1', icon: '🎇', max: 1, baseCost: 150 },
+  { id: 'pulsar', name: 'Pulsar', desc: 'Start every run with Nova Pulse Lv1', icon: '💥', max: 1, baseCost: 175 },
 ]
 
 export const SHOP_BY_ID: Record<ShopId, ShopDef> = Object.fromEntries(SHOP_UPGRADES.map((s) => [s.id, s])) as Record<

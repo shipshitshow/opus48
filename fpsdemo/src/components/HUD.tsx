@@ -564,7 +564,7 @@ export function HUD({
         />
       )}
 
-      {bannerSeq > 0 && playing && (
+      {bannerSeq > 0 && status !== 'gameover' && (
         <div
           key={`b-${bannerSeq}`}
           className="absolute top-[26%] left-1/2 text-[64px] font-black tracking-[0.08em] text-white opacity-0 whitespace-nowrap animate-bannerpop [text-shadow:0_0_24px_rgba(0,216,255,0.7),0_4px_14px_rgba(0,0,0,0.6)]"
@@ -709,17 +709,11 @@ export function HUD({
 
       <div className={`${HUD_CORNER} right-[18px] bottom-[18px] text-right min-w-[150px]`}>
         <div className="text-[13px] tracking-[0.12em] uppercase text-accent mb-[2px]">{weapon}</div>
-        {survivors ? (
-          <div className="flex items-baseline justify-end gap-[6px]">
-            <span className="text-[30px] font-extrabold text-good">∞</span>
-          </div>
-        ) : (
-          <div className="flex items-baseline justify-end gap-[6px]">
-            <span className={`text-[30px] font-extrabold${ammo === 0 ? ' text-danger' : ''}`}>{ammo}</span>
-            <span className="text-[16px] opacity-70">/ {reserve}</span>
-          </div>
-        )}
-        {!survivors &&
+        <div className="flex items-baseline justify-end gap-[6px]">
+          <span className={`text-[30px] font-extrabold${ammo === 0 ? ' text-danger' : ''}`}>{ammo}</span>
+          <span className="text-[16px] opacity-70">/ {survivors ? '∞' : reserve}</span>
+        </div>
+        {
           (reloading ? (
             <div className="mt-[6px] flex flex-col items-end gap-[3px] text-warn text-[12px] tracking-[0.08em] uppercase">
               <div className="w-[120px] h-[5px] bg-white/[0.15] rounded-[3px] overflow-hidden">

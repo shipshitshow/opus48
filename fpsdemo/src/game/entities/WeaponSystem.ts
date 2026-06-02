@@ -192,7 +192,7 @@ export class WeaponSystem {
 
   shoot() {
     const spec = WEAPONS[this.ctx.activeWeapon]
-    if (!this.ctx.survivors) this.ctx.ammo-- // Survivors: the sidearm has no ammo system
+    this.ctx.ammo-- // magazine depletes in every mode (Survivors has infinite reserve, not infinite mag)
     this.ctx.fireCooldown = spec.fireInterval / this.ctx.statFireRateMul
     this.weaponRecoil = Math.min(0.16, this.weaponRecoil + (spec.pellets > 1 ? 0.12 : 0.05))
     audio.sfx('shoot')
@@ -286,9 +286,9 @@ export class WeaponSystem {
   }
 
   startReload() {
-    if (this.ctx.survivors) return // no reloads in Survivors — the gun is infinite
     const spec = WEAPONS[this.ctx.activeWeapon]
-    if (this.ctx.reloading || this.ctx.reserve <= 0 || this.ctx.ammo >= spec.magazineSize) return
+    if (this.ctx.reloading || this.ctx.ammo >= spec.magazineSize) return
+    if (!this.ctx.survivors && this.ctx.reserve <= 0) return // Survivors: reserve is infinite
     this.ctx.reloading = true
     this.ctx.reloadTimer = RELOAD_TIME
     this.ctx.firing = false
@@ -298,10 +298,14 @@ export class WeaponSystem {
 
   finishReload() {
     const spec = WEAPONS[this.ctx.activeWeapon]
-    const need = spec.magazineSize - this.ctx.ammo
-    const taken = Math.min(need, this.ctx.reserve)
-    this.ctx.ammo += taken
-    this.ctx.reserve -= taken
+    if (this.ctx.survivors) {
+      this.ctx.ammo = spec.magazineSize // infinite reserve — always tops the magazine back up
+    } else {
+      const need = spec.magazineSize - this.ctx.ammo
+      const taken = Math.min(need, this.ctx.reserve)
+      this.ctx.ammo += taken
+      this.ctx.reserve -= taken
+    }
     this.ctx.reloading = false
     this.magazine.position.y = this.magBaseY
     this.weapon.rotation.set(0, 0, 0)

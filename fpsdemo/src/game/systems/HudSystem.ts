@@ -21,6 +21,13 @@ export class HudSystem {
 
   constructor(private ctx: GameContext, private sys: GameSystems) {}
 
+  /** Drop the current centre banner (bannerSeq 0 = nothing to render). Called on
+   *  run start so a prior "DEFEAT"/"VICTORY" can't re-flash in the new run. */
+  clearBanner() {
+    this.banner = ''
+    this.bannerSeq = 0
+  }
+
   announce(text: string) {
     this.banner = text
     this.bannerSeq++

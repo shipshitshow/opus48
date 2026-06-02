@@ -87,6 +87,8 @@ export class SurvivorsSystem {
     this.choices = []
     this.upgradeLevels = {}
     if ((this.shopTiers['arsenal'] ?? 0) > 0) this.upgradeLevels.orbit = 1 // Arsenal perk
+    if ((this.shopTiers['munitions'] ?? 0) > 0) this.upgradeLevels.bolt = 1 // Munitions perk
+    if ((this.shopTiers['pulsar'] ?? 0) > 0) this.upgradeLevels.nova = 1 // Pulsar perk
     this.survSpawnTimer = 1.0
     this.survClock = 0
     this.eliteTimer = SURV_ELITE_INTERVAL
@@ -96,10 +98,10 @@ export class SurvivorsSystem {
     this.clearSurvivorsEntities()
     this.recomputeStats()
     this.ctx.health = this.ctx.maxHealthValue
-    // No ammo economy in Survivors — the sidearm is infinite (shown as ∞).
-    // Depth comes from the drafted auto-weapons + melee, not from reloading.
+    // Survivors: infinite RESERVE but a real magazine — you still reload (the
+    // weapon's fire/reload cadence is part of the challenge), you just never run dry.
     this.ctx.ammo = WEAPONS[this.ctx.activeWeapon].magazineSize
-    this.ctx.reserve = 0
+    this.ctx.reserve = 0 // unused in Survivors (reload ignores reserve); shown as ∞
     this.ctx.reloading = false
   }
 
@@ -468,6 +470,12 @@ export class SurvivorsSystem {
       }
     }
     return best
+  }
+
+  /** Elites ("bosses") drop survival rewards on top of their big XP gem. */
+  onEliteKilled(pos: THREE.Vector3) {
+    this.sys.pickups.spawnPickup('health', pos.x + 1.2, pos.z)
+    this.sys.pickups.spawnPickup('damage', pos.x - 1.2, pos.z)
   }
 
   dropXpGem(pos: THREE.Vector3, value: number) {
