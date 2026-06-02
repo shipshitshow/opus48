@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { HUDState } from '../game/types'
 import type { ScoreEntry, Settings } from '../game/storage'
 
@@ -10,6 +11,72 @@ interface Props {
   onToggleMusic: () => void
   onToggleSfx: () => void
   onClearScores: () => void
+  onStartMultiplayer: (name: string, room: string) => void
+  onLeaveRoom: () => void
+}
+
+function randomRoom(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+  let s = ''
+  for (let i = 0; i < 4; i++) s += chars[Math.floor(Math.random() * chars.length)]
+  return `ARENA-${s}`
+}
+
+function MultiplayerPanel({ onStart }: { onStart: (name: string, room: string) => void }) {
+  const [name, setName] = useState(() => localStorage.getItem('fps-arena.name') || '')
+  const [room, setRoom] = useState('')
+  const join = () => {
+    const n = name.trim() || 'Player'
+    const r = (room.trim() || randomRoom()).toUpperCase()
+    localStorage.setItem('fps-arena.name', n)
+    onStart(n, r)
+  }
+  return (
+    <div className="mp-panel" onClick={(e) => e.stopPropagation()}>
+      <div className="mp-title">⚔ Multiplayer — PvP Arena</div>
+      <div className="mp-row">
+        <input
+          className="mp-input"
+          placeholder="Your name"
+          maxLength={16}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <input
+          className="mp-input"
+          placeholder="Room code (blank = random)"
+          maxLength={20}
+          value={room}
+          onChange={(e) => setRoom(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') join()
+          }}
+        />
+      </div>
+      <button type="button" className="btn mp-join" onClick={join}>
+        ⚔ Join Room
+      </button>
+      <div className="mp-note">Share the room code so friends can join the same arena.</div>
+    </div>
+  )
+}
+
+function Scoreboard({ board, room, connected }: { board: HUDState['scoreboard']; room: string; connected: boolean }) {
+  return (
+    <div className="scoreboard-hud">
+      <div className="sb-head">
+        <span>⚔ {room || '—'}</span>
+        <span className={connected ? 'sb-on' : 'sb-off'}>{connected ? '● live' : '○ …'}</span>
+      </div>
+      {board.map((p) => (
+        <div key={p.id} className={`sb-row${p.you ? ' you' : ''}`}>
+          <span className="sb-name">{p.name}{p.you ? ' (you)' : ''}</span>
+          <span className="sb-hp">{p.health}</span>
+          <span className="sb-kills">{p.kills}</span>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 function formatTime(seconds: number): string {
@@ -155,6 +222,8 @@ export function HUD({
   onToggleMusic,
   onToggleSfx,
   onClearScores,
+  onStartMultiplayer,
+  onLeaveRoom,
 }: Props) {
   const {
     status,
@@ -187,6 +256,10 @@ export function HUD({
     bannerSeq,
     toast,
     toastSeq,
+    multiplayer,
+    connected,
+    room,
+    scoreboard,
   } = state
 
   const healthFrac = playerHealth / maxPlayerHealth
@@ -223,33 +296,41 @@ export function HUD({
         </div>
       )}
 
+      {playing && multiplayer && <Scoreboard board={scoreboard} room={room} connected={connected} />}
+
       <div className="hud-corner hud-top">
         <div>
           <div className="stat-label">Time</div>
           <div className="stat-value big">{formatTime(time)}</div>
         </div>
-        <div>
-          <div className="stat-label">Wave</div>
-          <div className={`stat-value${bossActive ? ' boss' : ''}`}>
-            {bossActive ? 'BOSS' : `${wave}/${totalWaves}`}
+        {!multiplayer && (
+          <div>
+            <div className="stat-label">Wave</div>
+            <div className={`stat-value${bossActive ? ' boss' : ''}`}>
+              {bossActive ? 'BOSS' : `${wave}/${totalWaves}`}
+            </div>
           </div>
-        </div>
+        )}
+        {!multiplayer && (
+          <div>
+            <div className="stat-label">Score</div>
+            <div className="stat-value">{score.toLocaleString()}</div>
+          </div>
+        )}
         <div>
-          <div className="stat-label">Score</div>
-          <div className="stat-value">{score.toLocaleString()}</div>
-        </div>
-        <div>
-          <div className="stat-label">Kills</div>
+          <div className="stat-label">{multiplayer ? 'Frags' : 'Kills'}</div>
           <div className="stat-value">{kills}</div>
         </div>
         <div>
           <div className="stat-label">HS</div>
           <div className="stat-value">{headshots}</div>
         </div>
-        <div>
-          <div className="stat-label">Enemies</div>
-          <div className="stat-value">{enemiesAlive}</div>
-        </div>
+        {!multiplayer && (
+          <div>
+            <div className="stat-label">Enemies</div>
+            <div className="stat-value">{enemiesAlive}</div>
+          </div>
+        )}
       </div>
 
       {bossActive && (
@@ -335,18 +416,35 @@ export function HUD({
             </div>
             <Leaderboard scores={scores} onClear={onClearScores} />
           </div>
+          <MultiplayerPanel onStart={onStartMultiplayer} />
           <SettingsRow settings={settings} onToggleMusic={onToggleMusic} onToggleSfx={onToggleSfx} />
-          <p className="hint">▶ Click anywhere to play</p>
+          <p className="hint">▶ Click anywhere to play solo (campaign)</p>
         </div>
       )}
 
       {status === 'paused' && (
         <div className="overlay" onClick={onLock}>
           <h2>Paused</h2>
-          <p>
-            Score {score.toLocaleString()} · Kills {kills} · {bossActive ? 'BOSS' : `Wave ${wave}/${totalWaves}`}
-          </p>
+          {multiplayer ? (
+            <p>Room {room} · Frags {kills}</p>
+          ) : (
+            <p>
+              Score {score.toLocaleString()} · Kills {kills} · {bossActive ? 'BOSS' : `Wave ${wave}/${totalWaves}`}
+            </p>
+          )}
           <SettingsRow settings={settings} onToggleMusic={onToggleMusic} onToggleSfx={onToggleSfx} />
+          {multiplayer && (
+            <button
+              type="button"
+              className="btn leave-btn"
+              onClick={(e) => {
+                e.stopPropagation()
+                onLeaveRoom()
+              }}
+            >
+              ⤺ Leave Room
+            </button>
+          )}
           <p className="hint">▶ Click to resume</p>
         </div>
       )}

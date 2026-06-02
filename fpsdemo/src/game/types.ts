@@ -2,7 +2,25 @@ export type GameStatus =
   | 'pointerlock-needed' // waiting for the player to click in to lock the pointer
   | 'playing'
   | 'paused'
+  | 'levelup' // Survivors mode: choosing an upgrade
   | 'gameover'
+
+export interface UpgradeChoice {
+  id: string
+  name: string
+  desc: string
+  icon: string
+  level: number // current level (0 if new)
+  max: number
+}
+
+export interface BuildEntry {
+  id: string
+  name: string
+  icon: string
+  level: number
+  max: number
+}
 
 export interface HUDState {
   status: GameStatus
@@ -46,6 +64,26 @@ export interface HUDState {
   /** Small transient toast for pickups ("+ SHOTGUN", "+35 HP", ...). */
   toast: string
   toastSeq: number
+  /** Multiplayer (PvP arena) state. */
+  multiplayer: boolean
+  connected: boolean
+  room: string
+  scoreboard: ScoreboardEntry[]
+  /** Survivors mode state. */
+  survivors: boolean
+  level: number
+  xp: number
+  xpToNext: number
+  build: BuildEntry[]
+  choices: UpgradeChoice[]
+}
+
+export interface ScoreboardEntry {
+  id: string
+  name: string
+  kills: number
+  health: number
+  you: boolean
 }
 
 export type StateListener = (state: HUDState) => void

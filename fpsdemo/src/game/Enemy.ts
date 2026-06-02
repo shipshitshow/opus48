@@ -24,6 +24,8 @@ import {
 import { ENEMY_SPRITE_TEXTURES } from './spriteAssets'
 
 const HEALTHBAR_WIDTH = 1.3
+type EnemySpriteKind = 'melee' | 'ranged' | 'boss'
+type EnemySpriteView = 'front' | 'side' | 'back'
 
 export interface DamageResult {
   died: boolean
@@ -109,6 +111,8 @@ export class Enemy {
   private shieldMesh: THREE.Mesh
   private spriteMat: THREE.SpriteMaterial
   private sprite: THREE.Sprite
+  private spriteView: EnemySpriteView = 'front'
+  private spriteFlip = 1
   private muzzle = new THREE.Vector3()
 
   constructor() {
@@ -144,7 +148,7 @@ export class Enemy {
     this.hitMeshes.push(legs, torso, head)
 
     this.spriteMat = new THREE.SpriteMaterial({
-      map: ENEMY_SPRITE_TEXTURES.melee,
+      map: ENEMY_SPRITE_TEXTURES.melee.front,
       color: 0xffffff,
       transparent: true,
       alphaTest: 0.06,
@@ -225,24 +229,59 @@ export class Enemy {
     this.updateHealthBar()
   }
 
-  private applySprite() {
-    const texture = this.isBoss
-      ? ENEMY_SPRITE_TEXTURES.boss
-      : this.ranged
-        ? ENEMY_SPRITE_TEXTURES.ranged
-        : ENEMY_SPRITE_TEXTURES.melee
+  private spriteKind(): EnemySpriteKind {
+    if (this.isBoss) return 'boss'
+    return this.ranged ? 'ranged' : 'melee'
+  }
 
-    this.spriteMat.map = texture
-    this.spriteMat.color.setHex(0xffffff)
-    this.spriteMat.needsUpdate = true
-
-    if (this.isBoss) {
-      this.sprite.scale.set(2.15, 2.55, 1)
-    } else if (this.ranged) {
-      this.sprite.scale.set(1.38, 2.2, 1)
-    } else {
-      this.sprite.scale.set(1.65, 2.18, 1)
+  private spriteScale(kind: EnemySpriteKind, view: EnemySpriteView): [number, number] {
+    if (kind === 'boss') {
+      if (view === 'side') return [1.85, 2.55]
+      if (view === 'back') return [2.05, 2.55]
+      return [2.15, 2.55]
     }
+    if (kind === 'ranged') {
+      if (view === 'side') return [1.18, 2.2]
+      if (view === 'back') return [1.28, 2.2]
+      return [1.38, 2.2]
+    }
+    if (view === 'side') return [1.48, 2.18]
+    if (view === 'back') return [1.58, 2.18]
+    return [1.65, 2.18]
+  }
+
+  private applySprite(view: EnemySpriteView = 'front', flip = 1, elapsed = 0, moving = false) {
+    const kind = this.spriteKind()
+    const texture = ENEMY_SPRITE_TEXTURES[kind][view]
+
+    if (this.spriteMat.map !== texture) {
+      this.spriteMat.map = texture
+      this.spriteMat.needsUpdate = true
+    }
+    this.spriteView = view
+    this.spriteFlip = flip
+
+    const [baseW, baseH] = this.spriteScale(kind, view)
+    const step = moving ? Math.sin(elapsed * (this.speed * 2.8) + this.bobPhase) : 0
+    const squash = Math.abs(step)
+    this.spriteMat.color.setHex(0xffffff)
+    this.spriteMat.rotation = moving ? step * 0.035 * flip : 0
+    this.sprite.scale.set(baseW * (1 + squash * 0.025) * flip, baseH * (1 - squash * 0.035), 1)
+    this.sprite.position.y = moving ? squash * 0.035 : 0
+  }
+
+  private chooseSpriteFrame(moveX: number, moveZ: number, dirX: number, dirZ: number): { view: EnemySpriteView; flip: number } {
+    const moveLen = Math.hypot(moveX, moveZ)
+    if (moveLen < 0.05) return { view: this.spriteView, flip: this.spriteFlip }
+
+    const mx = moveX / moveLen
+    const mz = moveZ / moveLen
+    const dot = mx * dirX + mz * dirZ
+    if (dot > 0.5) return { view: 'front', flip: 1 }
+    if (dot < -0.45) return { view: 'back', flip: 1 }
+
+    const cross = dirX * mz - dirZ * mx
+    return { view: 'side', flip: cross >= 0 ? 1 : -1 }
   }
 
   private applyStyle(color: number) {
@@ -331,6 +370,8 @@ export class Enemy {
 
     this.group.rotation.y = Math.atan2(dirX, dirZ)
     pos.y = Math.abs(Math.sin(elapsed * (this.speed * 1.6) + this.bobPhase)) * 0.07
+    const frame = this.chooseSpriteFrame(moveX, moveZ, dirX, dirZ)
+    this.applySprite(frame.view, frame.flip, elapsed, Math.hypot(moveX, moveZ) > 0.05)
     this.healthBarGroup.quaternion.copy(cameraQuat)
 
     // ---- boss abilities

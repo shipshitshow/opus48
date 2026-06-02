@@ -1,6 +1,8 @@
 import * as THREE from 'three'
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js'
 import { audio } from '../audio/AudioEngine'
+import { NetClient, type RemotePlayerInfo } from '../net/NetClient'
+import { RemoteAvatar } from '../net/RemoteAvatar'
 import { Enemy, type EnemyShot } from './Enemy'
 import {
   ARENA_HALF,
@@ -52,36 +54,69 @@ import {
   type PickupKind,
   type WeaponId,
 } from './constants'
-import { WEAPON_SPRITE_TEXTURES } from './spriteAssets'
-import type { GameStatus, HUDState, StateListener } from './types'
+import { ARENA_TEXTURES, PROJECTILE_SPRITE_TEXTURES, WEAPON_SPRITE_TEXTURES } from './spriteAssets'
+import {
+  BOLT_DMG,
+  BOLT_SPEED,
+  BOLT_TTL,
+  NOVA_DMG,
+  NOVA_INTERVAL,
+  NOVA_RADIUS,
+  ORBIT_DMG,
+  ORBIT_HIT_CD,
+  ORBIT_HIT_RADIUS,
+  ORBIT_RADIUS,
+  ORBIT_SPEED,
+  SURV_BASE_MAGNET,
+  SURV_ELITE_INTERVAL,
+  SURV_ENEMY_BASE_HP,
+  SURV_SPAWN_CAP,
+  SURV_SPAWN_MIN,
+  SURV_SPAWN_START,
+  SURV_XP_ELITE_VALUE,
+  SURV_XP_GEM_VALUE,
+  UPGRADES,
+  UPGRADE_BY_ID,
+  xpForLevel,
+  type UpgradeId,
+} from './survivors'
+import type { BuildEntry, GameStatus, HUDState, StateListener, UpgradeChoice } from './types'
 
 const ENEMY_COLORS = [0xff5a3c, 0xffb02e, 0xff3b6b, 0x9b5cff, 0x2ee6a6, 0x4d9bff]
 const RANGED_COLOR = 0x35e0ff
+const WEAPON_VIEW_X = 0.45
+const WEAPON_VIEW_Y = -0.5
+const WEAPON_VIEW_Z = -0.72
 
 const WEAPON_SPRITE_CONFIG: Record<WeaponId, {
   scale: [number, number]
   offset: [number, number, number]
   muzzle: [number, number, number]
+  flashScale: number
 }> = {
   rifle: {
-    scale: [0.67, 0.78],
-    offset: [0.02, -0.03, 0],
-    muzzle: [-0.08, 0.18, -0.34],
+    scale: [0.56, 0.65],
+    offset: [0.11, -0.07, 0],
+    muzzle: [-0.18, 0.2, -0.1],
+    flashScale: 0.85,
   },
   smg: {
-    scale: [0.56, 0.84],
-    offset: [0.02, -0.06, 0],
-    muzzle: [-0.08, 0.16, -0.3],
+    scale: [0.48, 0.72],
+    offset: [0.11, -0.09, 0],
+    muzzle: [-0.16, 0.17, -0.1],
+    flashScale: 0.75,
   },
   shotgun: {
-    scale: [0.76, 0.8],
-    offset: [0.03, -0.05, 0],
-    muzzle: [-0.06, 0.15, -0.36],
+    scale: [0.64, 0.7],
+    offset: [0.12, -0.08, 0],
+    muzzle: [-0.15, 0.18, -0.1],
+    flashScale: 1.05,
   },
   cannon: {
-    scale: [0.88, 0.82],
-    offset: [0.04, -0.05, 0],
-    muzzle: [-0.08, 0.16, -0.4],
+    scale: [0.64, 0.58],
+    offset: [0.15, -0.13, 0],
+    muzzle: [-0.17, 0.15, -0.1],
+    flashScale: 1.15,
   },
 }
 
@@ -111,11 +146,13 @@ interface Pickup {
   age: number
 }
 interface Projectile {
-  mesh: THREE.Mesh
+  mesh: THREE.Sprite
   vel: THREE.Vector3
   damage: number
   age: number
   fromBoss: boolean
+  baseScale: number
+  spin: number
 }
 
 export class Game {
@@ -197,6 +234,51 @@ export class Game {
   private bossEnemy: Enemy | null = null
   private bossMaxHealth = BOSS_HEALTH
 
+  // Multiplayer
+  private net: NetClient | null = null
+  private multiplayer = false
+  private connected = false
+  private roomName = ''
+  private playerName = 'Player'
+  private remotePlayers = new Map<string, RemoteAvatar>()
+  private _euler = new THREE.Euler(0, 0, 0, 'YXZ')
+
+  // Survivors mode
+  private survivors = false
+  private level = 1
+  private xp = 0
+  private xpToNext = xpForLevel(1)
+  private pendingLevels = 0
+  private choices: UpgradeChoice[] = []
+  private upgradeLevels: Partial<Record<UpgradeId, number>> = {}
+  // derived stats (1 / 0 = no effect, so campaign + MP are unaffected)
+  private statDamageMul = 1
+  private statFireRateMul = 1
+  private statMoveMul = 1
+  private statMaxHpBonus = 0
+  private statRegen = 0
+  private statMagnet = SURV_BASE_MAGNET
+  private statXpMul = 1
+  private statCrit = 0
+  private statMultishot = 0
+  private orbitLevel = 0
+  private boltLevel = 0
+  private novaLevel = 0
+  // auto-weapon runtime
+  private orbitGroup!: THREE.Group
+  private orbitOrbs: THREE.Mesh[] = []
+  private orbitAngle = 0
+  private orbitCd = new WeakMap<Enemy, number>()
+  private bolts: { mesh: THREE.Mesh; vel: THREE.Vector3; dmg: number; age: number; pierce: number }[] = []
+  private boltTimer = 0
+  private novas: { mesh: THREE.Mesh; age: number; ttl: number; hit: Set<Enemy>; dmg: number; maxR: number }[] = []
+  private novaTimer = NOVA_INTERVAL
+  private survSpawnTimer = 0
+  private survClock = 0
+  private eliteTimer = SURV_ELITE_INTERVAL
+  private xpGems: { mesh: THREE.Mesh; value: number; age: number }[] = []
+  private enemyXp = new WeakMap<Enemy, number>()
+
   // HUD sync
   private emitAccumulator = 0
   private hitMarkerSeq = 0
@@ -229,6 +311,10 @@ export class Game {
     this.buildArena()
     this.buildWeapon()
     this.bindEvents()
+
+    this.orbitGroup = new THREE.Group()
+    this.orbitGroup.visible = false
+    this.scene.add(this.orbitGroup)
 
     this.resetPlayer()
     this.startWaveSystem()
@@ -285,20 +371,22 @@ export class Game {
   }
 
   private buildArena() {
-    const floorTex = this.makeGridTexture()
-    floorTex.wrapS = floorTex.wrapT = THREE.RepeatWrapping
-    floorTex.repeat.set(ARENA_HALF / 2, ARENA_HALF / 2)
-    floorTex.anisotropy = this.renderer.capabilities.getMaxAnisotropy()
+    const floorTex = this.makeRepeatingTexture(ARENA_TEXTURES.floor, ARENA_HALF / 3.5, ARENA_HALF / 3.5)
 
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(ARENA_HALF * 2, ARENA_HALF * 2),
-      new THREE.MeshStandardMaterial({ map: floorTex, color: 0x8a93a6, roughness: 0.95, metalness: 0.05 }),
+      new THREE.MeshStandardMaterial({ map: floorTex, color: 0xffffff, roughness: 0.9, metalness: 0.08 }),
     )
     floor.rotation.x = -Math.PI / 2
     floor.receiveShadow = true
     this.scene.add(floor)
 
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0x2b3142, roughness: 0.7, metalness: 0.2 })
+    const wallMat = new THREE.MeshStandardMaterial({
+      map: this.makeRepeatingTexture(ARENA_TEXTURES.wall, 16, 1),
+      color: 0xffffff,
+      roughness: 0.65,
+      metalness: 0.22,
+    })
     const trimMat = new THREE.MeshStandardMaterial({ color: 0x00d8ff, emissive: 0x00aacc, emissiveIntensity: 1.4 })
     const span = ARENA_HALF * 2 + WALL_THICKNESS
     const wallDefs: Array<[number, number, number, number]> = [
@@ -322,7 +410,12 @@ export class Game {
     }
 
     const crateMat = new THREE.MeshStandardMaterial({ color: 0x7c6a45, roughness: 0.85, metalness: 0.1 })
-    const pillarMat = new THREE.MeshStandardMaterial({ color: 0x3a4254, roughness: 0.6, metalness: 0.35 })
+    const pillarMat = new THREE.MeshStandardMaterial({
+      map: this.makeRepeatingTexture(ARENA_TEXTURES.column, 1, 3),
+      color: 0xffffff,
+      roughness: 0.58,
+      metalness: 0.32,
+    })
 
     const addBox = (x: number, z: number, w: number, h: number, d: number, mat: THREE.Material) => {
       const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat)
@@ -352,6 +445,15 @@ export class Game {
     for (const [x, z] of pillars) addBox(x, z, 2.0, WALL_HEIGHT, 2.0, pillarMat)
 
     this.raycastTargets.push(...this.solidMeshes)
+  }
+
+  private makeRepeatingTexture(source: THREE.Texture, repeatX: number, repeatY: number): THREE.Texture {
+    const tex = source.clone()
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+    tex.repeat.set(repeatX, repeatY)
+    tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy()
+    tex.needsUpdate = true
+    return tex
   }
 
   private makeGridTexture(): THREE.CanvasTexture {
@@ -437,7 +539,7 @@ export class Game {
     this.muzzleLight.castShadow = false
     this.weapon.add(this.muzzleLight)
 
-    this.weapon.position.set(0.32, -0.28, -0.6)
+    this.weapon.position.set(WEAPON_VIEW_X, WEAPON_VIEW_Y, WEAPON_VIEW_Z)
     this.camera.add(this.weapon)
     this.applyWeaponModel(this.activeWeapon)
   }
@@ -456,6 +558,7 @@ export class Game {
     this.weaponSprite.scale.set(sprite.scale[0], sprite.scale[1], 1)
     this.weaponSprite.position.set(sprite.offset[0], sprite.offset[1], sprite.offset[2])
     this.muzzleFlash.position.set(sprite.muzzle[0], sprite.muzzle[1], sprite.muzzle[2])
+    this.muzzleFlash.scale.setScalar(sprite.flashScale)
     this.muzzleLight.position.set(sprite.muzzle[0], sprite.muzzle[1], sprite.muzzle[2])
   }
 
@@ -831,6 +934,607 @@ export class Game {
     }
   }
 
+  // -------------------------------------------------------------- multiplayer
+
+  /** Join a PvP arena room. Disables the PvE campaign; players fight each other. */
+  startMultiplayer(room: string, name: string) {
+    this.leaveMultiplayer(false) // tear down any prior session/avatars first
+    this.resetPlayer()
+    this.multiplayer = true
+    this.connected = false
+    this.roomName = room
+    this.playerName = name || 'Player'
+    this.kills = 0
+
+    // Disable the PvE campaign.
+    for (const e of this.enemies) e.kill()
+    this.waveActive = false
+    this.bossActive = false
+    this.bossEnemy = null
+    this.waveBreakTimer = 1e9
+    this.clearProjectiles()
+    while (this.pickups.length) this.removePickup(this.pickups.length - 1)
+
+    this.net = new NetClient({
+      onStatus: (c) => {
+        this.connected = c
+        this.emit()
+      },
+      onWelcome: (selfId, players) => {
+        for (const p of players) {
+          if (p.id === selfId) this.camera.position.set(p.x, PLAYER_HEIGHT, p.z)
+          else this.addRemote(p)
+        }
+        this.emit()
+      },
+      onJoin: (p) => {
+        this.addRemote(p)
+        this.emit()
+      },
+      onLeave: (id) => {
+        this.removeRemote(id)
+        this.emit()
+      },
+      onState: (id, x, y, z, yaw, weapon, health) => {
+        const r = this.remotePlayers.get(id)
+        if (r) {
+          r.setTarget(x, y, z, yaw)
+          if (typeof health === 'number') r.setHealth(health)
+        }
+      },
+      onName: (id, nm) => {
+        const r = this.remotePlayers.get(id)
+        if (r) {
+          r.setMeta(nm, r.kills)
+          this.emit()
+        }
+      },
+      onHit: (msg) => this.onNetHit(msg),
+    })
+    this.net.connect(room, this.playerName)
+
+    this.status = 'pointerlock-needed'
+    this.emit()
+    this.requestLock()
+  }
+
+  /** Leave the room. If toMenu, return to the solo start menu. */
+  leaveMultiplayer(toMenu = true) {
+    if (this.net) {
+      this.net.disconnect()
+      this.net = null
+    }
+    for (const r of this.remotePlayers.values()) {
+      this.scene.remove(r.group)
+      this.raycastTargets = this.raycastTargets.filter((o) => !r.hitMeshes.includes(o as THREE.Mesh))
+      r.dispose()
+    }
+    this.remotePlayers.clear()
+    this.multiplayer = false
+    this.connected = false
+    this.roomName = ''
+    if (toMenu) {
+      this.resetPlayer()
+      this.startWaveSystem()
+      this.status = 'pointerlock-needed'
+      this.emit()
+    }
+  }
+
+  private addRemote(info: RemotePlayerInfo) {
+    if (!this.net || info.id === this.net.selfId || this.remotePlayers.has(info.id)) return
+    const avatar = new RemoteAvatar(info)
+    this.scene.add(avatar.group)
+    this.raycastTargets.push(...avatar.hitMeshes)
+    this.remotePlayers.set(info.id, avatar)
+  }
+
+  private removeRemote(id: string) {
+    const r = this.remotePlayers.get(id)
+    if (!r) return
+    this.scene.remove(r.group)
+    this.raycastTargets = this.raycastTargets.filter((o) => !r.hitMeshes.includes(o as THREE.Mesh))
+    r.dispose()
+    this.remotePlayers.delete(id)
+  }
+
+  private onNetHit(msg: import('../net/NetClient').HitMessage) {
+    const selfId = this.net?.selfId
+    if (msg.target === selfId) {
+      this.health = msg.health
+      this.damageSeq++
+      audio.sfx('hurt')
+      if (msg.killed && msg.respawn) {
+        this.camera.position.set(msg.respawn.x, PLAYER_HEIGHT, msg.respawn.z)
+        this.velocity.set(0, 0, 0)
+        this.showToast(`☠ Fragged by ${msg.byName}`)
+      }
+    } else {
+      const r = this.remotePlayers.get(msg.target)
+      if (r) {
+        r.setHealth(msg.health)
+        if (msg.killed && msg.respawn) {
+          r.group.position.set(msg.respawn.x, 0, msg.respawn.z)
+          r.setTarget(msg.respawn.x, PLAYER_HEIGHT, msg.respawn.z, 0)
+        }
+      }
+    }
+    if (msg.by === selfId) {
+      this.kills = msg.killerKills
+      if (msg.killed) {
+        this.killSeq++
+        this.showToast('FRAG!')
+        audio.sfx('kill')
+      }
+    } else {
+      const rk = this.remotePlayers.get(msg.by)
+      if (rk) rk.setMeta(rk.name, msg.killerKills)
+    }
+    this.emit()
+  }
+
+  private updateMultiplayer(delta: number) {
+    const quat = this.camera.quaternion
+    for (const r of this.remotePlayers.values()) r.update(delta, quat)
+    if (this.net) {
+      this._euler.setFromQuaternion(quat, 'YXZ')
+      this.net.sendState(
+        this.camera.position.x,
+        this.camera.position.y,
+        this.camera.position.z,
+        this._euler.y,
+        WEAPONS[this.activeWeapon].name,
+        Math.round(this.health),
+      )
+    }
+  }
+
+  // --------------------------------------------------------------- survivors
+
+  private get maxHealthValue(): number {
+    return PLAYER_MAX_HEALTH + this.statMaxHpBonus
+  }
+
+  /** Enter Survivors mode (endless swarms + level-up draft). */
+  startSurvivors() {
+    this.leaveMultiplayer(false)
+    this.survivors = true
+    this.resetPlayer()
+    this.initSurvivorsRun()
+    this.status = 'pointerlock-needed'
+    this.emit()
+    this.requestLock()
+  }
+
+  private initSurvivorsRun() {
+    this.level = 1
+    this.xp = 0
+    this.xpToNext = xpForLevel(1)
+    this.pendingLevels = 0
+    this.choices = []
+    this.upgradeLevels = {}
+    this.survSpawnTimer = 1.0
+    this.survClock = 0
+    this.eliteTimer = SURV_ELITE_INTERVAL
+    this.boltTimer = 0
+    this.novaTimer = NOVA_INTERVAL
+    for (const e of this.enemies) e.kill()
+    this.clearSurvivorsEntities()
+    this.recomputeStats()
+    this.health = this.maxHealthValue
+    // generous ammo so a swarm can't starve the main gun
+    this.reserve = WEAPONS[this.activeWeapon].reserveCap
+  }
+
+  private clearSurvivorsEntities() {
+    for (const g of this.xpGems) {
+      this.scene.remove(g.mesh)
+      g.mesh.geometry.dispose()
+      ;(g.mesh.material as THREE.Material).dispose()
+    }
+    this.xpGems = []
+    for (const b of this.bolts) {
+      this.scene.remove(b.mesh)
+      b.mesh.geometry.dispose()
+      ;(b.mesh.material as THREE.Material).dispose()
+    }
+    this.bolts = []
+    for (const n of this.novas) {
+      this.scene.remove(n.mesh)
+      n.mesh.geometry.dispose()
+      ;(n.mesh.material as THREE.Material).dispose()
+    }
+    this.novas = []
+    this.rebuildOrbit(0)
+    this.orbitGroup.visible = false
+  }
+
+  private recomputeStats() {
+    const lv = (id: UpgradeId) => this.upgradeLevels[id] ?? 0
+    this.statDamageMul = 1 + 0.25 * lv('dmg')
+    this.statFireRateMul = 1 + 0.18 * lv('rate')
+    this.statMoveMul = 1 + 0.12 * lv('speed')
+    this.statMaxHpBonus = 25 * lv('maxhp')
+    this.statRegen = 1.5 * lv('regen')
+    this.statMagnet = SURV_BASE_MAGNET * (1 + 0.45 * lv('magnet'))
+    this.statXpMul = 1 + 0.2 * lv('xpgain')
+    this.statCrit = 0.12 * lv('crit')
+    this.statMultishot = lv('multishot')
+    this.orbitLevel = lv('orbit')
+    this.boltLevel = lv('bolt')
+    this.novaLevel = lv('nova')
+    this.rebuildOrbit(this.orbitLevel ? this.orbitLevel + 1 : 0) // L1 = 2 blades
+    if (this.survivors) this.orbitGroup.visible = this.orbitLevel > 0
+  }
+
+  private rebuildOrbit(count: number) {
+    for (const o of this.orbitOrbs) {
+      this.orbitGroup.remove(o)
+      o.geometry.dispose()
+      ;(o.material as THREE.Material).dispose()
+    }
+    this.orbitOrbs = []
+    for (let i = 0; i < count; i++) {
+      const orb = new THREE.Mesh(
+        new THREE.SphereGeometry(0.32, 12, 10),
+        new THREE.MeshStandardMaterial({ color: 0x6fe7ff, emissive: 0x29c5ff, emissiveIntensity: 2.2, roughness: 0.3 }),
+      )
+      this.orbitGroup.add(orb)
+      this.orbitOrbs.push(orb)
+    }
+  }
+
+  private gainXp(v: number) {
+    this.xp += v * this.statXpMul
+    let leveled = false
+    while (this.xp >= this.xpToNext) {
+      this.xp -= this.xpToNext
+      this.level++
+      this.xpToNext = xpForLevel(this.level)
+      this.pendingLevels++
+      leveled = true
+    }
+    if (leveled && this.status === 'playing') this.triggerLevelUp()
+  }
+
+  private triggerLevelUp() {
+    this.status = 'levelup'
+    this.rollChoices()
+    if (this.controls.isLocked) this.controls.unlock()
+    audio.sfx('victory')
+    this.emit()
+  }
+
+  private rollChoices() {
+    const eligible = UPGRADES.filter((u) => (this.upgradeLevels[u.id] ?? 0) < u.max)
+    // shuffle (no seeded RNG needed here)
+    for (let i = eligible.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[eligible[i], eligible[j]] = [eligible[j], eligible[i]]
+    }
+    const pick = eligible.slice(0, 3)
+    this.choices = pick.map((u) => ({
+      id: u.id,
+      name: u.name,
+      desc: u.desc,
+      icon: u.icon,
+      level: this.upgradeLevels[u.id] ?? 0,
+      max: u.max,
+    }))
+  }
+
+  /** Called from the React draft UI when a card is chosen. */
+  pickUpgrade(id: string) {
+    if (this.status !== 'levelup') return
+    const uid = id as UpgradeId
+    if (UPGRADE_BY_ID[uid]) {
+      const prev = this.upgradeLevels[uid] ?? 0
+      this.upgradeLevels[uid] = prev + 1
+      this.recomputeStats()
+      if (uid === 'maxhp') this.health = Math.min(this.maxHealthValue, this.health + 25)
+      audio.sfx('pickup')
+    }
+    this.pendingLevels = Math.max(0, this.pendingLevels - 1)
+    if (this.pendingLevels > 0) {
+      this.rollChoices()
+      this.emit()
+    } else {
+      this.choices = []
+      this.status = 'playing'
+      this.emit()
+      this.lockPointer()
+    }
+  }
+
+  private updateSurvivors(delta: number) {
+    this.survClock += delta
+
+    // regen
+    if (this.statRegen > 0 && this.health > 0) {
+      this.health = Math.min(this.maxHealthValue, this.health + this.statRegen * delta)
+    }
+
+    // escalating swarm spawns
+    this.survSpawnTimer -= delta
+    const interval = Math.max(SURV_SPAWN_MIN, SURV_SPAWN_START - this.survClock * 0.012)
+    if (this.survSpawnTimer <= 0 && this.aliveCount < SURV_SPAWN_CAP) {
+      this.spawnSwarmEnemy(false)
+      this.survSpawnTimer = interval
+    }
+    this.eliteTimer -= delta
+    if (this.eliteTimer <= 0) {
+      this.spawnSwarmEnemy(true)
+      this.eliteTimer = SURV_ELITE_INTERVAL
+    }
+
+    this.updateOrbit(delta)
+    this.updateBolts(delta)
+    this.updateNovas(delta)
+    this.updateXpGems(delta)
+  }
+
+  private spawnSwarmEnemy(elite: boolean) {
+    const enemy = this.getFreeEnemy()
+    // spawn on a ring around the player, just out of immediate sight
+    const a = Math.random() * Math.PI * 2
+    const r = 26 + Math.random() * 10
+    let x = this.camera.position.x + Math.cos(a) * r
+    let z = this.camera.position.z + Math.sin(a) * r
+    const lim = ARENA_HALF - 2
+    x = Math.max(-lim, Math.min(lim, x))
+    z = Math.max(-lim, Math.min(lim, z))
+    const scale = 1 + this.survClock * 0.015 // HP scales with time
+    const hp = SURV_ENEMY_BASE_HP * scale * (elite ? 9 : 1)
+    const ranged = !elite && Math.random() < 0.18 + Math.min(0.25, this.survClock * 0.002)
+    enemy.spawnAt(x, z, {
+      maxHealth: hp,
+      speed: (elite ? 2.2 : 2.8 + Math.random() * 1.4) * (1 + this.survClock * 0.004),
+      color: elite ? 0xff1f4f : ranged ? RANGED_COLOR : ENEMY_COLORS[Math.floor(Math.random() * ENEMY_COLORS.length)],
+      isBoss: elite,
+      ranged,
+      scale: elite ? 2.2 : 1,
+      attackDamage: elite ? 16 : 7,
+      projectileDamage: 7,
+    })
+    this.enemyXp.set(enemy, elite ? SURV_XP_ELITE_VALUE : SURV_XP_GEM_VALUE)
+  }
+
+  /** Apply damage from an auto-weapon (handles death + XP, no crosshair marker). */
+  private autoDamageEnemy(enemy: Enemy, dmg: number) {
+    if (!enemy.alive) return
+    const crit = this.statCrit > 0 && Math.random() < this.statCrit
+    const res = enemy.takeDamage(dmg * this.statDamageMul * (crit ? 2 : 1), false)
+    if (res.died) this.onEnemyDeath(enemy, false)
+  }
+
+  private updateOrbit(delta: number) {
+    if (this.orbitLevel <= 0) {
+      this.orbitGroup.visible = false
+      return
+    }
+    this.orbitGroup.visible = true
+    this.orbitGroup.position.set(this.camera.position.x, 1.2, this.camera.position.z)
+    this.orbitAngle += ORBIT_SPEED * delta
+    const n = this.orbitOrbs.length
+    for (let i = 0; i < n; i++) {
+      const ang = this.orbitAngle + (i / n) * Math.PI * 2
+      this.orbitOrbs[i].position.set(Math.cos(ang) * ORBIT_RADIUS, 0, Math.sin(ang) * ORBIT_RADIUS)
+    }
+    const dmg = ORBIT_DMG * (1 + 0.25 * (this.orbitLevel - 1))
+    const now = this.survClock
+    for (const enemy of this.enemies) {
+      if (!enemy.alive) continue
+      const ep = enemy.position
+      let near = false
+      for (const orb of this.orbitOrbs) {
+        const ox = this.orbitGroup.position.x + orb.position.x
+        const oz = this.orbitGroup.position.z + orb.position.z
+        if (Math.hypot(ep.x - ox, ep.z - oz) < ORBIT_HIT_RADIUS + enemy.radius) {
+          near = true
+          break
+        }
+      }
+      if (near && (this.orbitCd.get(enemy) ?? 0) <= now) {
+        this.orbitCd.set(enemy, now + ORBIT_HIT_CD)
+        this.autoDamageEnemy(enemy, dmg)
+      }
+    }
+  }
+
+  private updateBolts(delta: number) {
+    if (this.boltLevel > 0) {
+      this.boltTimer -= delta
+      const interval = Math.max(0.18, 0.9 - 0.08 * (this.boltLevel - 1))
+      if (this.boltTimer <= 0) {
+        this.boltTimer = interval
+        const count = 1 + Math.floor((this.boltLevel - 1) / 2)
+        for (let i = 0; i < count; i++) this.fireBolt()
+      }
+    }
+    const eyeY = 1.3
+    for (let i = this.bolts.length - 1; i >= 0; i--) {
+      const b = this.bolts[i]
+      b.age += delta
+      // light homing toward nearest enemy
+      const tgt = this.nearestEnemy(b.mesh.position)
+      if (tgt) {
+        const dx = tgt.position.x - b.mesh.position.x
+        const dz = tgt.position.z - b.mesh.position.z
+        const d = Math.hypot(dx, dz) || 1
+        const cur = b.vel.length() || BOLT_SPEED
+        b.vel.x += (dx / d) * cur * 2.5 * delta
+        b.vel.z += (dz / d) * cur * 2.5 * delta
+        b.vel.setLength(cur)
+      }
+      b.mesh.position.addScaledVector(b.vel, delta)
+      b.mesh.position.y = eyeY
+      let hitEnemy: Enemy | null = null
+      for (const enemy of this.enemies) {
+        if (!enemy.alive) continue
+        if (Math.hypot(enemy.position.x - b.mesh.position.x, enemy.position.z - b.mesh.position.z) < 0.8 + enemy.radius) {
+          hitEnemy = enemy
+          break
+        }
+      }
+      const bound = ARENA_HALF - 1
+      if (hitEnemy) {
+        this.autoDamageEnemy(hitEnemy, b.dmg)
+        b.pierce -= 1
+        if (b.pierce < 0) {
+          this.removeBolt(i)
+          continue
+        }
+      }
+      if (b.age > BOLT_TTL || Math.abs(b.mesh.position.x) > bound || Math.abs(b.mesh.position.z) > bound) {
+        this.removeBolt(i)
+      }
+    }
+  }
+
+  private fireBolt() {
+    const tgt = this.nearestEnemy(this.camera.position)
+    if (!tgt) return
+    const mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(0.22, 10, 8),
+      new THREE.MeshBasicMaterial({ color: 0x8affff, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }),
+    )
+    mesh.position.set(this.camera.position.x, 1.3, this.camera.position.z)
+    const dx = tgt.position.x - mesh.position.x
+    const dz = tgt.position.z - mesh.position.z
+    const d = Math.hypot(dx, dz) || 1
+    const vel = new THREE.Vector3((dx / d) * BOLT_SPEED, 0, (dz / d) * BOLT_SPEED)
+    this.scene.add(mesh)
+    this.bolts.push({ mesh, vel, dmg: BOLT_DMG * (1 + 0.18 * (this.boltLevel - 1)), age: 0, pierce: Math.floor((this.boltLevel - 1) / 2) })
+    audio.sfx('hit')
+  }
+
+  private removeBolt(i: number) {
+    const b = this.bolts[i]
+    this.scene.remove(b.mesh)
+    b.mesh.geometry.dispose()
+    ;(b.mesh.material as THREE.Material).dispose()
+    this.bolts.splice(i, 1)
+  }
+
+  private updateNovas(delta: number) {
+    if (this.novaLevel > 0) {
+      this.novaTimer -= delta
+      const interval = Math.max(1.4, NOVA_INTERVAL - 0.22 * (this.novaLevel - 1))
+      if (this.novaTimer <= 0) {
+        this.novaTimer = interval
+        this.castNova()
+      }
+    }
+    for (let i = this.novas.length - 1; i >= 0; i--) {
+      const nv = this.novas[i]
+      nv.age += delta
+      const t = nv.age / nv.ttl
+      const radius = nv.maxR * t
+      nv.mesh.scale.setScalar(Math.max(0.001, radius))
+      ;(nv.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, 0.6 * (1 - t))
+      // damage enemies the ring has reached (once each)
+      for (const enemy of this.enemies) {
+        if (!enemy.alive || nv.hit.has(enemy)) continue
+        const d = Math.hypot(enemy.position.x - nv.mesh.position.x, enemy.position.z - nv.mesh.position.z)
+        if (d <= radius) {
+          nv.hit.add(enemy)
+          this.autoDamageEnemy(enemy, nv.dmg)
+        }
+      }
+      if (nv.age >= nv.ttl) {
+        this.scene.remove(nv.mesh)
+        nv.mesh.geometry.dispose()
+        ;(nv.mesh.material as THREE.Material).dispose()
+        this.novas.splice(i, 1)
+      }
+    }
+  }
+
+  private castNova() {
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.82, 1.0, 40),
+      new THREE.MeshBasicMaterial({ color: 0xff7a3c, transparent: true, opacity: 0.6, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }),
+    )
+    ring.rotation.x = -Math.PI / 2
+    ring.position.set(this.camera.position.x, 0.2, this.camera.position.z)
+    ring.scale.setScalar(0.001)
+    this.scene.add(ring)
+    this.novas.push({
+      mesh: ring,
+      age: 0,
+      ttl: 0.55,
+      hit: new Set(),
+      dmg: NOVA_DMG * (1 + 0.3 * (this.novaLevel - 1)),
+      maxR: NOVA_RADIUS * (1 + 0.12 * (this.novaLevel - 1)),
+    })
+    audio.sfx('boss')
+  }
+
+  private nearestEnemy(from: THREE.Vector3): Enemy | null {
+    let best: Enemy | null = null
+    let bestD = Infinity
+    for (const e of this.enemies) {
+      if (!e.alive) continue
+      const d = (e.position.x - from.x) ** 2 + (e.position.z - from.z) ** 2
+      if (d < bestD) {
+        bestD = d
+        best = e
+      }
+    }
+    return best
+  }
+
+  private dropXpGem(pos: THREE.Vector3, value: number) {
+    const big = value > 1
+    const mesh = new THREE.Mesh(
+      new THREE.OctahedronGeometry(big ? 0.42 : 0.26),
+      new THREE.MeshStandardMaterial({
+        color: big ? 0xffd166 : 0x59f0c0,
+        emissive: big ? 0xffb02e : 0x2ee6a6,
+        emissiveIntensity: 1.8,
+        roughness: 0.3,
+      }),
+    )
+    mesh.position.set(pos.x, 0.6, pos.z)
+    this.scene.add(mesh)
+    this.xpGems.push({ mesh, value, age: 0 })
+  }
+
+  private updateXpGems(delta: number) {
+    const px = this.camera.position.x
+    const pz = this.camera.position.z
+    for (let i = this.xpGems.length - 1; i >= 0; i--) {
+      const g = this.xpGems[i]
+      g.age += delta
+      g.mesh.rotation.y += delta * 3
+      g.mesh.position.y = 0.6 + Math.sin(g.age * 4) * 0.1
+      const d = Math.hypot(g.mesh.position.x - px, g.mesh.position.z - pz)
+      if (d < this.statMagnet) {
+        // magnet pull
+        const pull = (1 - d / this.statMagnet) * 26 + 4
+        g.mesh.position.x += ((px - g.mesh.position.x) / (d || 1)) * pull * delta
+        g.mesh.position.z += ((pz - g.mesh.position.z) / (d || 1)) * pull * delta
+      }
+      if (d < 1.3) {
+        this.gainXp(g.value)
+        this.scene.remove(g.mesh)
+        g.mesh.geometry.dispose()
+        ;(g.mesh.material as THREE.Material).dispose()
+        this.xpGems.splice(i, 1)
+      }
+    }
+  }
+
+  /** Build summary for the HUD level-up / loadout panels. */
+  private buildList(): BuildEntry[] {
+    const out: BuildEntry[] = []
+    for (const u of UPGRADES) {
+      const lvl = this.upgradeLevels[u.id] ?? 0
+      if (lvl > 0) out.push({ id: u.id, name: u.name, icon: u.icon, level: lvl, max: u.max })
+    }
+    return out
+  }
+
   // -------------------------------------------------------------------- loop
 
   private loop = () => {
@@ -879,9 +1583,17 @@ export class Game {
       this.startReload()
     }
 
-    this.updateEnemies(delta, elapsed)
-    this.updateProjectiles(delta)
-    this.updateWaves(delta)
+    if (this.multiplayer) {
+      this.updateMultiplayer(delta)
+    } else if (this.survivors) {
+      this.updateEnemies(delta, elapsed)
+      this.updateProjectiles(delta)
+      this.updateSurvivors(delta)
+    } else {
+      this.updateEnemies(delta, elapsed)
+      this.updateProjectiles(delta)
+      this.updateWaves(delta)
+    }
   }
 
   private updatePlayerMovement(delta: number) {
@@ -969,8 +1681,23 @@ export class Game {
 
       let endPoint: THREE.Vector3 | null = null
       for (const h of hits) {
-        const ud = h.object.userData as { enemy?: Enemy; part?: string; solid?: boolean }
-        if (ud.enemy) {
+        const ud = h.object.userData as { enemy?: Enemy; part?: string; solid?: boolean; remoteId?: string }
+        if (ud.remoteId) {
+          // PvP: report the hit to the server (authoritative health/kills).
+          const headshot = ud.part === 'head'
+          const dmg = spec.damage * dmgMult * (headshot ? HEADSHOT_MULTIPLIER : 1)
+          this.net?.sendHit(ud.remoteId, dmg)
+          endPoint = h.point.clone()
+          if (headshot) {
+            this.headshots++
+            this.headshotSeq++
+            audio.sfx('headshot')
+          } else {
+            this.hitMarkerSeq++
+            audio.sfx('hit')
+          }
+          break
+        } else if (ud.enemy) {
           if (!ud.enemy.alive) continue
           const headshot = ud.part === 'head'
           const dmg = spec.damage * dmgMult * (headshot ? HEADSHOT_MULTIPLIER : 1)
@@ -1058,10 +1785,17 @@ export class Game {
 
   private spawnProjectile(shot: EnemyShot) {
     const color = shot.fromBoss ? 0xff2d6a : 0xff8a3c
-    const mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(shot.fromBoss ? 0.3 : 0.2, 10, 10),
-      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }),
-    )
+    const mesh = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: shot.fromBoss ? PROJECTILE_SPRITE_TEXTURES.boss : PROJECTILE_SPRITE_TEXTURES.enemy,
+      color,
+      transparent: true,
+      opacity: 0.95,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    }))
+    const baseScale = shot.fromBoss ? 0.9 : 0.58
+    mesh.scale.setScalar(baseScale)
     mesh.position.copy(shot.origin)
     this.scene.add(mesh)
     this.projectiles.push({
@@ -1070,6 +1804,8 @@ export class Game {
       damage: shot.damage,
       age: 0,
       fromBoss: shot.fromBoss,
+      baseScale,
+      spin: (Math.random() < 0.5 ? -1 : 1) * (shot.fromBoss ? 3.8 : 5.5),
     })
   }
 
@@ -1080,6 +1816,9 @@ export class Game {
       const pr = this.projectiles[i]
       pr.age += delta
       pr.mesh.position.addScaledVector(pr.vel, delta)
+      const pulse = 1 + Math.sin(pr.age * (pr.fromBoss ? 10 : 14)) * 0.12
+      pr.mesh.scale.setScalar(pr.baseScale * pulse)
+      ;(pr.mesh.material as THREE.SpriteMaterial).rotation += delta * pr.spin
       const p = pr.mesh.position
 
       // hit the player?
@@ -1107,7 +1846,6 @@ export class Game {
   private removeProjectile(i: number) {
     const pr = this.projectiles[i]
     this.scene.remove(pr.mesh)
-    pr.mesh.geometry.dispose()
     ;(pr.mesh.material as THREE.Material).dispose()
     this.projectiles.splice(i, 1)
   }
@@ -1115,7 +1853,6 @@ export class Game {
   private clearProjectiles() {
     for (const pr of this.projectiles) {
       this.scene.remove(pr.mesh)
-      pr.mesh.geometry.dispose()
       ;(pr.mesh.material as THREE.Material).dispose()
     }
     this.projectiles = []
@@ -1202,23 +1939,25 @@ export class Game {
     if (this.reloading) {
       const p = 1 - this.reloadTimer / RELOAD_TIME
       const dip = Math.sin(Math.min(1, p) * Math.PI)
-      this.weapon.position.set(0.32, -0.28 - dip * 0.16, -0.6 + dip * 0.08)
-      this.weapon.rotation.set(-dip * 0.55, dip * 0.4, dip * 0.32)
+      this.weapon.position.set(WEAPON_VIEW_X + dip * 0.03, WEAPON_VIEW_Y - dip * 0.22, WEAPON_VIEW_Z + dip * 0.08)
+      this.weapon.rotation.set(-dip * 0.45, dip * 0.24, dip * 0.2)
       const magOut = p < 0.5 ? p * 2 : (1 - p) * 2
       this.magazine.position.y = this.magBaseY - magOut * 0.28
+      this.weaponSpriteMat.opacity = 0.72 + (1 - dip) * 0.28
       this.weaponRecoil = 0
       return
     }
 
     this.weaponRecoil = Math.max(0, this.weaponRecoil - delta * 0.5)
     this.magazine.position.y = this.magBaseY
+    this.weaponSpriteMat.opacity = 1
 
     const moving = (this.move.forward || this.move.back || this.move.left || this.move.right) && this.canJump
     if (moving) this.bobTime += delta * 9
-    const bobX = moving ? Math.cos(this.bobTime) * 0.006 : 0
-    const bobY = moving ? Math.abs(Math.sin(this.bobTime)) * 0.008 : 0
-    this.weapon.position.set(0.32 + bobX, -0.28 + bobY, -0.6 + this.weaponRecoil)
-    this.weapon.rotation.set(-this.weaponRecoil * 2.2, 0, 0)
+    const bobX = moving ? Math.cos(this.bobTime) * 0.008 : 0
+    const bobY = moving ? Math.abs(Math.sin(this.bobTime)) * 0.01 : 0
+    this.weapon.position.set(WEAPON_VIEW_X + bobX, WEAPON_VIEW_Y + bobY, WEAPON_VIEW_Z + this.weaponRecoil * 0.65)
+    this.weapon.rotation.set(-this.weaponRecoil * 1.45, 0, this.weaponRecoil * 0.25)
   }
 
   // ----------------------------------------------------------------- control
@@ -1255,8 +1994,9 @@ export class Game {
     this.camera.lookAt(0, PLAYER_HEIGHT, -10)
 
     if (this.weapon) {
-      this.weapon.position.set(0.32, -0.28, -0.6)
+      this.weapon.position.set(WEAPON_VIEW_X, WEAPON_VIEW_Y, WEAPON_VIEW_Z)
       this.weapon.rotation.set(0, 0, 0)
+      this.weaponSpriteMat.opacity = 1
       this.magazine.position.y = this.magBaseY
       this.applyWeaponModel(this.activeWeapon)
     }
@@ -1363,13 +2103,34 @@ export class Game {
       bannerSeq: this.bannerSeq,
       toast: this.toast,
       toastSeq: this.toastSeq,
+      multiplayer: this.multiplayer,
+      connected: this.connected,
+      room: this.roomName,
+      scoreboard: this.multiplayer ? this.buildScoreboard() : [],
     }
     this.listener(state)
+  }
+
+  private buildScoreboard() {
+    const board = [
+      { id: 'self', name: this.playerName, kills: this.kills, health: Math.round(this.health), you: true },
+      ...[...this.remotePlayers.values()].map((r) => ({
+        id: r.id,
+        name: r.name,
+        kills: r.kills,
+        health: Math.round(r.health),
+        you: false,
+      })),
+    ]
+    board.sort((a, b) => b.kills - a.kills)
+    return board
   }
 
   dispose() {
     this.disposed = true
     cancelAnimationFrame(this.raf)
+
+    this.leaveMultiplayer(false)
 
     window.removeEventListener('keydown', this.onKeyDown)
     window.removeEventListener('keyup', this.onKeyUp)

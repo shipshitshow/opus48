@@ -46,6 +46,10 @@ const INITIAL_STATE: HUDState = {
   bannerSeq: 0,
   toast: '',
   toastSeq: 0,
+  multiplayer: false,
+  connected: false,
+  room: '',
+  scoreboard: [],
 }
 
 export default function App() {
@@ -124,6 +128,11 @@ export default function App() {
     })
   }, [])
   const handleClearScores = useCallback(() => setScores(clearScores()), [])
+  const handleStartMultiplayer = useCallback((name: string, room: string) => {
+    audio.unlock()
+    gameRef.current?.startMultiplayer(room, name)
+  }, [])
+  const handleLeaveRoom = useCallback(() => gameRef.current?.leaveMultiplayer(true), [])
 
   return (
     <div className="game-root" ref={containerRef}>
@@ -136,6 +145,8 @@ export default function App() {
         onToggleMusic={toggleMusic}
         onToggleSfx={toggleSfx}
         onClearScores={handleClearScores}
+        onStartMultiplayer={handleStartMultiplayer}
+        onLeaveRoom={handleLeaveRoom}
       />
     </div>
   )
