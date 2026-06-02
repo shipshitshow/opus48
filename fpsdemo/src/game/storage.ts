@@ -72,3 +72,32 @@ export function saveSettings(s: Settings) {
     /* ignore */
   }
 }
+
+// ---- Survivors meta-progression (persistent gold + permanent upgrade tiers) ----
+const SHOP_KEY = 'fps-arena.shop.v1'
+
+export interface ShopState {
+  gold: number
+  tiers: Record<string, number>
+}
+
+export function loadShop(): ShopState {
+  try {
+    const raw = localStorage.getItem(SHOP_KEY)
+    if (raw) {
+      const s = JSON.parse(raw)
+      return { gold: Math.max(0, Number(s.gold) || 0), tiers: s.tiers && typeof s.tiers === 'object' ? s.tiers : {} }
+    }
+  } catch {
+    /* ignore */
+  }
+  return { gold: 0, tiers: {} }
+}
+
+export function saveShop(s: ShopState) {
+  try {
+    localStorage.setItem(SHOP_KEY, JSON.stringify(s))
+  } catch {
+    /* ignore */
+  }
+}

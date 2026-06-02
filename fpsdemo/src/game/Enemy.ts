@@ -343,6 +343,7 @@ export class Enemy {
     // movement intent
     let moveX = sepX * this.speed * 0.6
     let moveZ = sepZ * this.speed * 0.6
+    let retreating = false
     if (this.ranged && !this.isBoss) {
       // kite: hold preferred range, strafe around the player
       if (dist > this.preferredRange + 1.5) {
@@ -351,6 +352,7 @@ export class Enemy {
       } else if (dist < this.preferredRange - 2) {
         moveX -= dirX * this.speed * 0.8
         moveZ -= dirZ * this.speed * 0.8
+        retreating = true
       } else {
         // strafe perpendicular to the player direction
         moveX += -dirZ * this.strafeSign * this.speed * 0.7
@@ -391,8 +393,8 @@ export class Enemy {
       this.eyeMat.emissiveIntensity = Math.max(restEye, this.eyeMat.emissiveIntensity - delta * 12)
     }
 
-    // ---- ranged fire (mobs and boss)
-    if ((this.ranged || this.isBoss) && dist <= ENEMY_FIRE_RANGE) {
+    // ---- ranged fire (mobs and boss). Mobs hold fire while backing away.
+    if ((this.isBoss || (this.ranged && !retreating)) && dist <= ENEMY_FIRE_RANGE) {
       this.fireTimer -= delta
       if (this.fireTimer <= 0) {
         tick.shots.push(this.makeShot(playerPos, 0))

@@ -72,3 +72,42 @@ export const BOLT_TTL = 1.6
 export const NOVA_DMG = 34
 export const NOVA_RADIUS = 6.5
 export const NOVA_INTERVAL = 3.2
+
+// ---- Shop: permanent meta-upgrades bought with gold between runs ----
+export type ShopId = 'might' | 'vigor' | 'swift' | 'regenP' | 'magnetP' | 'scholar' | 'greed' | 'arsenal'
+
+export interface ShopDef {
+  id: ShopId
+  name: string
+  desc: string
+  icon: string
+  max: number
+  baseCost: number
+}
+
+export const SHOP_UPGRADES: ShopDef[] = [
+  { id: 'might', name: 'Might', desc: '+8% base damage (all sources)', icon: '🔥', max: 5, baseCost: 60 },
+  { id: 'vigor', name: 'Vigor', desc: '+15 starting max health', icon: '❤️', max: 5, baseCost: 60 },
+  { id: 'swift', name: 'Swift', desc: '+6% base move speed', icon: '🥾', max: 4, baseCost: 70 },
+  { id: 'regenP', name: 'Recovery', desc: '+0.6 base HP regen / second', icon: '✚', max: 4, baseCost: 80 },
+  { id: 'magnetP', name: 'Lodestone', desc: '+20% base pickup radius', icon: '🧲', max: 4, baseCost: 50 },
+  { id: 'scholar', name: 'Scholar', desc: '+10% XP gained', icon: '📈', max: 4, baseCost: 70 },
+  { id: 'greed', name: 'Greed', desc: '+12% gold earned per run', icon: '💰', max: 4, baseCost: 90 },
+  { id: 'arsenal', name: 'Arsenal', desc: 'Start every run with Orbiting Blades Lv1', icon: '🌀', max: 1, baseCost: 150 },
+]
+
+export const SHOP_BY_ID: Record<ShopId, ShopDef> = Object.fromEntries(SHOP_UPGRADES.map((s) => [s.id, s])) as Record<
+  ShopId,
+  ShopDef
+>
+
+/** Cost to buy the next tier (current tier -> tier+1). */
+export function shopCost(def: ShopDef, tier: number): number {
+  return Math.round(def.baseCost * (1 + tier * 0.85))
+}
+
+/** Gold awarded for a finished Survivors run. */
+export function runGold(kills: number, level: number, time: number, greedTier: number): number {
+  const base = kills * 2 + level * 8 + Math.floor(time)
+  return Math.floor(base * (1 + 0.12 * greedTier))
+}

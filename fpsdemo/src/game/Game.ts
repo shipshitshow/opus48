@@ -31,6 +31,10 @@ import {
   HEADSHOT_MULTIPLIER,
   HEALTH_PICKUP_AMOUNT,
   JUMP_VELOCITY,
+  MELEE_ARC_DOT,
+  MELEE_COOLDOWN,
+  MELEE_DAMAGE,
+  MELEE_RANGE,
   MOVE_ACCEL,
   MOVE_DAMPING,
   PICKUP_DROP_CHANCE,
@@ -54,7 +58,7 @@ import {
   type PickupKind,
   type WeaponId,
 } from './constants'
-import { ARENA_TEXTURES, PROJECTILE_SPRITE_TEXTURES, WEAPON_SPRITE_TEXTURES } from './spriteAssets'
+import { ARENA_TEXTURES, PICKUP_SPRITE_TEXTURES, PROJECTILE_SPRITE_TEXTURES, WEAPON_SPRITE_TEXTURES } from './spriteAssets'
 import {
   BOLT_DMG,
   BOLT_SPEED,
@@ -189,6 +193,8 @@ export class Game {
   private weaponRecoil = 0
   private bobTime = 0
   private readonly magBaseY = -0.17
+  private meleeCd = 0
+  private meleeAnim = 0
 
   // Effects / projectiles / pickups
   private tracers: Tracer[] = []
@@ -279,6 +285,7 @@ export class Game {
   private eliteTimer = SURV_ELITE_INTERVAL
   private xpGems: { mesh: THREE.Mesh; value: number; age: number }[] = []
   private enemyXp = new WeakMap<Enemy, number>()
+  private shopTiers: Record<string, number> = {} // permanent meta-upgrades
 
   // HUD sync
   private emitAccumulator = 0
@@ -410,7 +417,12 @@ export class Game {
       this.scene.add(trim)
     }
 
-    const crateMat = new THREE.MeshStandardMaterial({ color: 0x7c6a45, roughness: 0.85, metalness: 0.1 })
+    const crateMat = new THREE.MeshStandardMaterial({
+      map: this.makeRepeatingTexture(ARENA_TEXTURES.block, 1, 1),
+      color: 0xffffff,
+      roughness: 0.72,
+      metalness: 0.24,
+    })
     const pillarMat = new THREE.MeshStandardMaterial({
       map: this.makeRepeatingTexture(ARENA_TEXTURES.column, 1, 3),
       color: 0xffffff,
@@ -675,7 +687,7 @@ export class Game {
       this.score += wasBoss ? 250 : 10
       this.spawnDeathPop(enemy.position.clone(), wasBoss ? 0xff2d55 : 0xffd166, wasBoss ? 2.0 : 0.8)
       this.dropXpGem(enemy.position.clone(), this.enemyXp.get(enemy) ?? SURV_XP_GEM_VALUE)
-      this.reserve = Math.min(spec.reserveCap, this.reserve + 3) // keep the main gun fed
+      // NOTE: no ammo on kill in Survivors — the sidearm is meant to run dry.
       return
     }
 
@@ -713,13 +725,31 @@ export class Game {
   spawnPickup(kind: PickupKind, x: number, z: number) {
     const color = PICKUP_COLORS[kind]
     const group = new THREE.Group()
+    const isWeapon = kind === 'rifle' || kind === 'smg' || kind === 'shotgun' || kind === 'cannon'
 
-    const gem = new THREE.Mesh(
-      new THREE.OctahedronGeometry(0.34),
-      new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.4, roughness: 0.3, metalness: 0.3 }),
-    )
-    gem.position.y = 0.9
-    gem.castShadow = true
+    // The "icon" is child[0]: a billboarded weapon sprite for weapon drops,
+    // or a spinning gem for health / ammo / damage.
+    let icon: THREE.Object3D
+    if (isWeapon) {
+      const mat = new THREE.SpriteMaterial({
+        map: WEAPON_SPRITE_TEXTURES[kind],
+        transparent: true,
+        depthWrite: false,
+        toneMapped: false,
+      })
+      const sprite = new THREE.Sprite(mat)
+      sprite.scale.set(1.5, 1.1, 1)
+      sprite.position.y = 1.0
+      icon = sprite
+    } else {
+      const gem = new THREE.Mesh(
+        new THREE.OctahedronGeometry(0.34),
+        new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.4, roughness: 0.3, metalness: 0.3 }),
+      )
+      gem.position.y = 0.9
+      gem.castShadow = true
+      icon = gem
+    }
 
     const ring = new THREE.Mesh(
       new THREE.RingGeometry(0.5, 0.62, 24),
@@ -734,7 +764,7 @@ export class Game {
     )
     beam.position.y = 0.8
 
-    group.add(gem, ring, beam)
+    group.add(icon, ring, beam)
     group.position.set(x, 0, z)
     this.scene.add(group)
     this.pickups.push({ group, kind, age: 0 })
@@ -746,9 +776,15 @@ export class Game {
     for (let i = this.pickups.length - 1; i >= 0; i--) {
       const p = this.pickups[i]
       p.age += delta
-      const gem = p.group.children[0]
-      gem.rotation.y += delta * 2.2
-      gem.position.y = 0.9 + Math.sin(p.age * 3) * 0.12
+      const icon = p.group.children[0]
+      const baseY = icon instanceof THREE.Sprite ? 1.0 : 0.9
+      icon.position.y = baseY + Math.sin(p.age * 3) * 0.12
+      if (icon instanceof THREE.Sprite) {
+        const s = 1 + Math.sin(p.age * 4) * 0.06
+        icon.scale.set(1.5 * s, 1.1 * s, 1)
+      } else {
+        icon.rotation.y += delta * 2.2
+      }
 
       const d = Math.hypot(p.group.position.x - px, p.group.position.z - pz)
       if (d < PICKUP_RADIUS) {
@@ -767,6 +803,9 @@ export class Game {
       if (o instanceof THREE.Mesh) {
         o.geometry.dispose()
         ;(o.material as THREE.Material).dispose()
+      } else if (o instanceof THREE.Sprite) {
+        // shared weapon textures are reused — dispose only the material instance
+        o.material.dispose()
       }
     })
     this.pickups.splice(i, 1)
@@ -829,9 +868,14 @@ export class Game {
     window.addEventListener('keyup', this.onKeyUp)
     document.addEventListener('mousedown', this.onMouseDown)
     document.addEventListener('mouseup', this.onMouseUp)
+    document.addEventListener('contextmenu', this.onContextMenu)
     window.addEventListener('resize', this.onResize)
     this.controls.addEventListener('lock', this.onLock)
     this.controls.addEventListener('unlock', this.onUnlock)
+  }
+
+  private onContextMenu = (e: Event) => {
+    if (this.status === 'playing') e.preventDefault() // right-click = melee, no menu
   }
 
   private onKeyDown = (e: KeyboardEvent) => {
@@ -862,6 +906,10 @@ export class Game {
         break
       case 'KeyR':
         this.startReload()
+        break
+      case 'KeyF':
+      case 'KeyV':
+        this.tryMelee()
         break
       case 'Digit1':
         this.switchWeapon(WEAPON_ORDER[0])
@@ -900,8 +948,12 @@ export class Game {
   }
 
   private onMouseDown = (e: MouseEvent) => {
-    if (e.button !== 0) return
     if (!this.controls.isLocked || this.status !== 'playing') return
+    if (e.button === 2) {
+      this.tryMelee() // right-click = melee
+      return
+    }
+    if (e.button !== 0) return
     this.firing = true
     this.triggerQueued = true
   }
@@ -1111,6 +1163,20 @@ export class Game {
     return PLAYER_MAX_HEALTH + this.statMaxHpBonus
   }
 
+  /** Enter the wave/boss campaign (explicit, from the menu). */
+  startCampaign() {
+    this.leaveMultiplayer(false)
+    this.survivors = false
+    this.recomputeStats()
+    this.resetPlayer()
+    this.clearTransientFx()
+    this.clearSurvivorsEntities()
+    this.startWaveSystem()
+    this.status = 'pointerlock-needed'
+    this.emit()
+    this.requestLock()
+  }
+
   /** Enter Survivors mode (endless swarms + level-up draft). */
   startSurvivors() {
     this.leaveMultiplayer(false)
@@ -1129,6 +1195,7 @@ export class Game {
     this.pendingLevels = 0
     this.choices = []
     this.upgradeLevels = {}
+    if ((this.shopTiers['arsenal'] ?? 0) > 0) this.upgradeLevels.orbit = 1 // Arsenal perk
     this.survSpawnTimer = 1.0
     this.survClock = 0
     this.eliteTimer = SURV_ELITE_INTERVAL
@@ -1138,8 +1205,11 @@ export class Game {
     this.clearSurvivorsEntities()
     this.recomputeStats()
     this.health = this.maxHealthValue
-    // generous ammo so a swarm can't starve the main gun
-    this.reserve = WEAPONS[this.activeWeapon].reserveCap
+    // No ammo economy in Survivors — the sidearm is infinite (shown as ∞).
+    // Depth comes from the drafted auto-weapons + melee, not from reloading.
+    this.ammo = WEAPONS[this.activeWeapon].magazineSize
+    this.reserve = 0
+    this.reloading = false
   }
 
   private clearSurvivorsEntities() {
@@ -1165,15 +1235,22 @@ export class Game {
     this.orbitGroup.visible = false
   }
 
+  /** Apply persistent shop tiers (called by React with the saved meta-progression). */
+  setShopUpgrades(tiers: Record<string, number>) {
+    this.shopTiers = tiers || {}
+    if (this.survivors) this.recomputeStats()
+  }
+
   private recomputeStats() {
     const lv = (id: UpgradeId) => this.upgradeLevels[id] ?? 0
-    this.statDamageMul = 1 + 0.25 * lv('dmg')
+    const sh = (id: string) => this.shopTiers[id] ?? 0
+    this.statDamageMul = (1 + 0.25 * lv('dmg')) * (1 + 0.08 * sh('might'))
     this.statFireRateMul = 1 + 0.18 * lv('rate')
-    this.statMoveMul = 1 + 0.12 * lv('speed')
-    this.statMaxHpBonus = 25 * lv('maxhp')
-    this.statRegen = 1.5 * lv('regen')
-    this.statMagnet = SURV_BASE_MAGNET * (1 + 0.45 * lv('magnet'))
-    this.statXpMul = 1 + 0.2 * lv('xpgain')
+    this.statMoveMul = (1 + 0.12 * lv('speed')) * (1 + 0.06 * sh('swift'))
+    this.statMaxHpBonus = 25 * lv('maxhp') + 15 * sh('vigor')
+    this.statRegen = 1.5 * lv('regen') + 0.6 * sh('regenP')
+    this.statMagnet = SURV_BASE_MAGNET * (1 + 0.45 * lv('magnet')) * (1 + 0.2 * sh('magnetP'))
+    this.statXpMul = (1 + 0.2 * lv('xpgain')) * (1 + 0.1 * sh('scholar'))
     this.statCrit = 0.12 * lv('crit')
     this.statMultishot = lv('multishot')
     this.orbitLevel = lv('orbit')
@@ -1575,6 +1652,8 @@ export class Game {
   private update(delta: number, elapsed: number) {
     this.time += delta
     if (this.damageBoostTimer > 0) this.damageBoostTimer = Math.max(0, this.damageBoostTimer - delta)
+    if (this.meleeCd > 0) this.meleeCd -= delta
+    if (this.meleeAnim > 0) this.meleeAnim = Math.max(0, this.meleeAnim - delta)
 
     this.updatePlayerMovement(delta)
     this.resolveCollisions()
@@ -1664,9 +1743,58 @@ export class Game {
     this.pushOutOfObstacles(pos, PLAYER_RADIUS)
   }
 
+  private tryMelee() {
+    if (this.status !== 'playing' || this.meleeCd > 0) return
+    this.doMelee()
+  }
+
+  /** Knife swing: always available (no ammo). Hits a frontal cluster of enemies. */
+  private doMelee() {
+    this.meleeCd = MELEE_COOLDOWN
+    this.meleeAnim = 0.22
+    audio.sfx('hit')
+
+    this.camera.getWorldDirection(this._fwd)
+    const flen = Math.hypot(this._fwd.x, this._fwd.z) || 1
+    const dirX = this._fwd.x / flen
+    const dirZ = this._fwd.z / flen
+    const px = this.camera.position.x
+    const pz = this.camera.position.z
+    const dmgMul = this.statDamageMul
+    let hitAny = false
+
+    for (const enemy of this.enemies) {
+      if (!enemy.alive) continue
+      const ex = enemy.position.x - px
+      const ez = enemy.position.z - pz
+      const d = Math.hypot(ex, ez)
+      if (d > MELEE_RANGE + enemy.radius) continue
+      if (d > 0.0001 && (ex * dirX + ez * dirZ) / d < MELEE_ARC_DOT) continue
+      const crit = this.statCrit > 0 && Math.random() < this.statCrit ? 2 : 1
+      const res = enemy.takeDamage(MELEE_DAMAGE * dmgMul * crit, false)
+      hitAny = true
+      if (res.died) this.onEnemyDeath(enemy, false)
+    }
+
+    if (this.multiplayer && this.net) {
+      for (const r of this.remotePlayers.values()) {
+        const rx = r.group.position.x - px
+        const rz = r.group.position.z - pz
+        const d = Math.hypot(rx, rz)
+        if (d > MELEE_RANGE + 0.6) continue
+        if (d > 0.0001 && (rx * dirX + rz * dirZ) / d < MELEE_ARC_DOT) continue
+        this.net.sendHit(r.id, MELEE_DAMAGE * dmgMul)
+        hitAny = true
+      }
+    }
+
+    if (hitAny) this.hitMarkerSeq++
+    this.emit()
+  }
+
   private shoot() {
     const spec = WEAPONS[this.activeWeapon]
-    this.ammo--
+    if (!this.survivors) this.ammo-- // Survivors: the sidearm has no ammo system
     this.fireCooldown = spec.fireInterval / this.statFireRateMul
     this.weaponRecoil = Math.min(0.16, this.weaponRecoil + (spec.pellets > 1 ? 0.12 : 0.05))
     audio.sfx('shoot')
@@ -1758,6 +1886,7 @@ export class Game {
   }
 
   private startReload() {
+    if (this.survivors) return // no reloads in Survivors — the gun is infinite
     const spec = WEAPONS[this.activeWeapon]
     if (this.reloading || this.reserve <= 0 || this.ammo >= spec.magazineSize) return
     this.reloading = true
@@ -1964,6 +2093,15 @@ export class Game {
   }
 
   private updateWeapon(delta: number) {
+    if (this.meleeAnim > 0) {
+      // quick knife swipe (takes priority over reload/idle pose)
+      const t = 1 - this.meleeAnim / 0.22
+      const slash = Math.sin(Math.min(1, t) * Math.PI)
+      this.weapon.position.set(WEAPON_VIEW_X - slash * 0.12, WEAPON_VIEW_Y + slash * 0.06, WEAPON_VIEW_Z - slash * 0.18)
+      this.weapon.rotation.set(-slash * 0.5, slash * 0.7, -slash * 0.9)
+      this.weaponSpriteMat.opacity = 1
+      return
+    }
     if (this.reloading) {
       const p = 1 - this.reloadTimer / RELOAD_TIME
       const dip = Math.sin(Math.min(1, p) * Math.PI)
@@ -2189,6 +2327,7 @@ export class Game {
     window.removeEventListener('keyup', this.onKeyUp)
     document.removeEventListener('mousedown', this.onMouseDown)
     document.removeEventListener('mouseup', this.onMouseUp)
+    document.removeEventListener('contextmenu', this.onContextMenu)
     window.removeEventListener('resize', this.onResize)
     this.controls.removeEventListener('lock', this.onLock)
     this.controls.removeEventListener('unlock', this.onUnlock)

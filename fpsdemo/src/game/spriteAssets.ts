@@ -12,10 +12,13 @@ import enemyRangedBackSpriteUrl from '../assets/sprites/enemy-ranged-back.webp'
 import enemyRangedSideSpriteUrl from '../assets/sprites/enemy-ranged-side.webp'
 import bossProjectileSpriteUrl from '../assets/sprites/projectile-boss.webp'
 import enemyProjectileSpriteUrl from '../assets/sprites/projectile-enemy.webp'
+import ammoPickupSpriteUrl from '../assets/sprites/pickup-ammo.webp'
+import healthPickupSpriteUrl from '../assets/sprites/pickup-health.webp'
 import cannonSpriteUrl from '../assets/sprites/weapon-cannon.webp'
 import rifleSpriteUrl from '../assets/sprites/weapon-rifle.webp'
 import shotgunSpriteUrl from '../assets/sprites/weapon-shotgun.webp'
 import smgSpriteUrl from '../assets/sprites/weapon-smg.webp'
+import arenaBlockTextureUrl from '../assets/textures/arena-block.webp'
 import arenaColumnTextureUrl from '../assets/textures/arena-column.webp'
 import arenaFloorTextureUrl from '../assets/textures/arena-floor.webp'
 import arenaWallTextureUrl from '../assets/textures/arena-wall.webp'
@@ -58,8 +61,14 @@ export const PROJECTILE_SPRITE_TEXTURES = {
   boss: loadSpriteTexture(bossProjectileSpriteUrl),
 } as const
 
+export const PICKUP_SPRITE_TEXTURES = {
+  health: loadSpriteTexture(healthPickupSpriteUrl),
+  ammo: loadSpriteTexture(ammoPickupSpriteUrl),
+} as const
+
 export const ARENA_TEXTURES = {
   floor: loadSpriteTexture(arenaFloorTextureUrl),
   wall: loadSpriteTexture(arenaWallTextureUrl),
   column: loadSpriteTexture(arenaColumnTextureUrl),
+  block: loadSpriteTexture(arenaBlockTextureUrl),
 } as const

@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { HUDState } from '../game/types'
-import type { ScoreEntry, Settings } from '../game/storage'
+import type { ScoreEntry, Settings, ShopState } from '../game/storage'
+import { SHOP_UPGRADES, shopCost } from '../game/survivors'
 
 interface Props {
   state: HUDState
@@ -13,6 +14,52 @@ interface Props {
   onClearScores: () => void
   onStartMultiplayer: (name: string, room: string) => void
   onLeaveRoom: () => void
+  onStartCampaign: () => void
+  onStartSurvivors: () => void
+  onPickUpgrade: (id: string) => void
+  onMenu: () => void
+  shop: ShopState
+  lastRunGold: number
+  onBuyShop: (id: string) => void
+}
+
+function Shop({ shop, onBuy }: { shop: ShopState; onBuy: (id: string) => void }) {
+  return (
+    <div className="shop-panel" onClick={(e) => e.stopPropagation()}>
+      <div className="shop-head">
+        <span className="shop-title">🛒 Survivors Upgrade Shop</span>
+        <span className="shop-gold">💰 {shop.gold.toLocaleString()}</span>
+      </div>
+      <div className="shop-grid">
+        {SHOP_UPGRADES.map((u) => {
+          const tier = shop.tiers[u.id] ?? 0
+          const maxed = tier >= u.max
+          const cost = shopCost(u, tier)
+          const afford = shop.gold >= cost
+          return (
+            <div key={u.id} className={`shop-item${maxed ? ' maxed' : ''}`}>
+              <div className="shop-icon">{u.icon}</div>
+              <div className="shop-info">
+                <div className="shop-name">
+                  {u.name} <span className="shop-tier">{tier}/{u.max}</span>
+                </div>
+                <div className="shop-desc">{u.desc}</div>
+              </div>
+              <button
+                type="button"
+                className="shop-buy"
+                disabled={maxed || !afford}
+                onClick={() => onBuy(u.id)}
+              >
+                {maxed ? 'MAX' : `💰 ${cost}`}
+              </button>
+            </div>
+          )
+        })}
+      </div>
+      <div className="shop-note">Permanent — applies to every Survivors run. Earn gold by surviving.</div>
+    </div>
+  )
 }
 
 function randomRoom(): string {
@@ -213,6 +260,52 @@ function Leaderboard({
   )
 }
 
+function SurvivorsHud({ state }: { state: HUDState }) {
+  const frac = state.xpToNext > 0 ? state.xp / state.xpToNext : 0
+  return (
+    <>
+      <div className="xp-wrap" aria-hidden>
+        <div className="xp-level">LV {state.level}</div>
+        <div className="xp-bar">
+          <div className="xp-fill" style={{ width: `${Math.max(0, Math.min(1, frac)) * 100}%` }} />
+        </div>
+        <div className="xp-num">
+          {state.xp}/{state.xpToNext}
+        </div>
+      </div>
+      {state.build.length > 0 && (
+        <div className="build-strip" aria-hidden>
+          {state.build.map((b) => (
+            <span key={b.id} className="build-chip" title={b.name}>
+              {b.icon}
+              <b>{b.level}</b>
+            </span>
+          ))}
+        </div>
+      )}
+    </>
+  )
+}
+
+function LevelUpDraft({ state, onPick }: { state: HUDState; onPick: (id: string) => void }) {
+  return (
+    <div className="overlay levelup">
+      <div className="title-badge">Level {state.level} — choose an upgrade</div>
+      <h2 className="levelup-title">LEVEL UP!</h2>
+      <div className="cards">
+        {state.choices.map((c) => (
+          <button key={c.id} type="button" className="card" onClick={() => onPick(c.id)}>
+            <div className="card-icon">{c.icon}</div>
+            <div className="card-name">{c.name}</div>
+            <div className="card-lvl">{c.level === 0 ? 'NEW' : `Lv ${c.level} → ${c.level + 1}`}</div>
+            <div className="card-desc">{c.desc}</div>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function HUD({
   state,
   scores,
@@ -224,6 +317,13 @@ export function HUD({
   onClearScores,
   onStartMultiplayer,
   onLeaveRoom,
+  onStartCampaign,
+  onStartSurvivors,
+  onPickUpgrade,
+  onMenu,
+  shop,
+  lastRunGold,
+  onBuyShop,
 }: Props) {
   const {
     status,
@@ -260,8 +360,15 @@ export function HUD({
     connected,
     room,
     scoreboard,
+    survivors,
   } = state
 
+  type MenuScreen = 'home' | 'modes' | 'survivor' | 'multiplayer' | 'shop' | 'settings' | 'leaderboard'
+  const [menuScreen, setMenuScreen] = useState<MenuScreen>('home')
+  // Reset to the root menu whenever the menu is (re)shown.
+  useEffect(() => {
+    if (status === 'pointerlock-needed') setMenuScreen('home')
+  }, [status])
   const healthFrac = playerHealth / maxPlayerHealth
   const playing = status === 'playing'
   const bossLabel = bossShielded ? 'SHIELDED' : bossEnraged ? 'ENRAGED' : 'BOSS'
@@ -297,18 +404,25 @@ export function HUD({
       )}
 
       {playing && multiplayer && <Scoreboard board={scoreboard} room={room} connected={connected} />}
+      {playing && survivors && <SurvivorsHud state={state} />}
 
       <div className="hud-corner hud-top">
         <div>
           <div className="stat-label">Time</div>
           <div className="stat-value big">{formatTime(time)}</div>
         </div>
-        {!multiplayer && (
+        {!multiplayer && !survivors && (
           <div>
             <div className="stat-label">Wave</div>
             <div className={`stat-value${bossActive ? ' boss' : ''}`}>
               {bossActive ? 'BOSS' : `${wave}/${totalWaves}`}
             </div>
+          </div>
+        )}
+        {survivors && (
+          <div>
+            <div className="stat-label">Level</div>
+            <div className="stat-value">{state.level}</div>
           </div>
         )}
         {!multiplayer && (
@@ -364,20 +478,28 @@ export function HUD({
 
       <div className="hud-corner hud-bottom-right">
         <div className="weapon-name">{weapon}</div>
-        <div className="ammo-line">
-          <span className={`ammo-mag${ammo === 0 ? ' empty' : ''}`}>{ammo}</span>
-          <span className="ammo-reserve">/ {reserve}</span>
-        </div>
-        {reloading ? (
-          <div className="reload-status">
-            <div className="reload-bar">
-              <div className="reload-bar-fill" style={{ width: `${reloadProgress * 100}%` }} />
-            </div>
-            <span>Reloading…</span>
+        {survivors ? (
+          <div className="ammo-line">
+            <span className="ammo-mag inf">∞</span>
           </div>
         ) : (
-          ammo === 0 && <div className="reload-hint">Press R to reload</div>
+          <div className="ammo-line">
+            <span className={`ammo-mag${ammo === 0 ? ' empty' : ''}`}>{ammo}</span>
+            <span className="ammo-reserve">/ {reserve}</span>
+          </div>
         )}
+        {!survivors &&
+          (reloading ? (
+            <div className="reload-status">
+              <div className="reload-bar">
+                <div className="reload-bar-fill" style={{ width: `${reloadProgress * 100}%` }} />
+              </div>
+              <span>Reloading…</span>
+            </div>
+          ) : (
+            ammo === 0 && <div className="reload-hint">Press R to reload</div>
+          ))}
+        <div className="melee-hint">🔪 R-Click / F</div>
         {weapons.length > 1 && (
           <div className="weapon-strip">
             {weapons.map((w) => (
@@ -390,35 +512,110 @@ export function HUD({
       </div>
 
       {/* Overlays */}
+      {status === 'levelup' && <LevelUpDraft state={state} onPick={onPickUpgrade} />}
+
       {status === 'pointerlock-needed' && (
-        <div className="overlay" onClick={onLock}>
-          <div className="title-badge">First-Person Shooter</div>
+        <div className="overlay menu">
           <h1>FPS ARENA</h1>
-          <p className="subtitle">
-            Survive {totalWaves} waves, grab weapon &amp; power-up drops, then beat the boss.
-          </p>
-          <div className="overlay-columns" onClick={(e) => e.stopPropagation()}>
-            <div className="controls-grid">
-              <span className="k"><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd></span>
-              <span className="d">Move</span>
-              <span className="k"><kbd>Mouse</kbd></span>
-              <span className="d">Look</span>
-              <span className="k"><kbd>L-Click</kbd></span>
-              <span className="d">Fire · headshots ×2.2</span>
-              <span className="k"><kbd>1</kbd>–<kbd>4</kbd></span>
-              <span className="d">Switch weapon</span>
-              <span className="k"><kbd>Space</kbd></span>
-              <span className="d">Jump</span>
-              <span className="k"><kbd>R</kbd></span>
-              <span className="d">Reload</span>
-              <span className="k"><kbd>Esc</kbd></span>
-              <span className="d">Pause</span>
+
+          {menuScreen === 'home' && (
+            <div className="menu-screen">
+              <div className="big-choices">
+                <button type="button" className="big-btn" onClick={() => setMenuScreen('modes')}>
+                  <div className="bb-icon">🎮</div>
+                  <div className="bb-name">Modes</div>
+                  <div className="bb-sub">Campaign · Survivors · Multiplayer</div>
+                </button>
+                <button type="button" className="big-btn" onClick={() => setMenuScreen('leaderboard')}>
+                  <div className="bb-icon">🏆</div>
+                  <div className="bb-name">Leaderboard</div>
+                  <div className="bb-sub">Top runs</div>
+                </button>
+                <button type="button" className="big-btn" onClick={() => setMenuScreen('settings')}>
+                  <div className="bb-icon">⚙️</div>
+                  <div className="bb-name">Settings</div>
+                  <div className="bb-sub">Music · SFX</div>
+                </button>
+              </div>
             </div>
-            <Leaderboard scores={scores} onClear={onClearScores} />
-          </div>
-          <MultiplayerPanel onStart={onStartMultiplayer} />
-          <SettingsRow settings={settings} onToggleMusic={onToggleMusic} onToggleSfx={onToggleSfx} />
-          <p className="hint">▶ Click anywhere to play solo (campaign)</p>
+          )}
+
+          {menuScreen === 'modes' && (
+            <div className="menu-screen">
+              <button type="button" className="back-btn" onClick={() => setMenuScreen('home')}>← Back</button>
+              <div className="menu-heading">Choose a Mode</div>
+              <div className="mode-cards">
+                <button type="button" className="mode-card campaign" onClick={onStartCampaign}>
+                  <div className="mc-icon">🎯</div>
+                  <div className="mc-name">Campaign</div>
+                  <div className="mc-desc">Survive {totalWaves} waves of bots, grab weapon &amp; power-up drops, then beat the boss.</div>
+                </button>
+                <button type="button" className="mode-card survivors" onClick={() => setMenuScreen('survivor')}>
+                  <div className="mc-icon">🧛</div>
+                  <div className="mc-name">Survivors</div>
+                  <div className="mc-desc">Endless escalating swarms. Kill, level up, and draft upgrades into broken combos.</div>
+                </button>
+                <button type="button" className="mode-card mp" onClick={() => setMenuScreen('multiplayer')}>
+                  <div className="mc-icon">⚔</div>
+                  <div className="mc-name">Multiplayer</div>
+                  <div className="mc-desc">PvP arena rooms. Share a code and fight friends online.</div>
+                </button>
+              </div>
+              <div className="controls-mini">
+                <kbd>WASD</kbd> Move · <kbd>Mouse</kbd> Look · <kbd>L-Click</kbd> Fire · <kbd>R-Click</kbd>/<kbd>F</kbd> Melee ·{' '}
+                <kbd>1–4</kbd> Weapon · <kbd>Space</kbd> Jump · <kbd>R</kbd> Reload · <kbd>Esc</kbd> Pause
+              </div>
+            </div>
+          )}
+
+          {menuScreen === 'survivor' && (
+            <div className="menu-screen">
+              <button type="button" className="back-btn" onClick={() => setMenuScreen('modes')}>← Back</button>
+              <div className="menu-heading">🧛 Survivors</div>
+              <div className="big-choices">
+                <button type="button" className="big-btn play" onClick={onStartSurvivors}>
+                  <div className="bb-icon">▶</div>
+                  <div className="bb-name">Play</div>
+                  <div className="bb-sub">Start a run</div>
+                </button>
+                <button type="button" className="big-btn" onClick={() => setMenuScreen('shop')}>
+                  <div className="bb-icon">🛒</div>
+                  <div className="bb-name">Shop</div>
+                  <div className="bb-sub">💰 {shop.gold.toLocaleString()} gold</div>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {menuScreen === 'shop' && (
+            <div className="menu-screen">
+              <button type="button" className="back-btn" onClick={() => setMenuScreen('survivor')}>← Back</button>
+              <Shop shop={shop} onBuy={onBuyShop} />
+            </div>
+          )}
+
+          {menuScreen === 'multiplayer' && (
+            <div className="menu-screen">
+              <button type="button" className="back-btn" onClick={() => setMenuScreen('modes')}>← Back</button>
+              <MultiplayerPanel onStart={onStartMultiplayer} />
+            </div>
+          )}
+
+          {menuScreen === 'settings' && (
+            <div className="menu-screen">
+              <button type="button" className="back-btn" onClick={() => setMenuScreen('home')}>← Back</button>
+              <div className="menu-heading">⚙️ Settings</div>
+              <SettingsRow settings={settings} onToggleMusic={onToggleMusic} onToggleSfx={onToggleSfx} />
+            </div>
+          )}
+
+          {menuScreen === 'leaderboard' && (
+            <div className="menu-screen">
+              <button type="button" className="back-btn" onClick={() => setMenuScreen('home')}>← Back</button>
+              <div className="menu-heading">🏆 Leaderboard</div>
+              <Leaderboard scores={scores} onClear={onClearScores} />
+            </div>
+          )}
         </div>
       )}
 
@@ -473,10 +670,18 @@ export function HUD({
               <div className="stat-value">{formatTime(time)}</div>
             </div>
           </div>
+          {survivors && lastRunGold > 0 && (
+            <div className="gold-earned">💰 +{lastRunGold.toLocaleString()} gold earned · spend it in the Shop</div>
+          )}
           <Leaderboard scores={scores} highlight={currentRun} onClear={onClearScores} />
-          <button className="btn" onClick={onRestart} type="button">
-            ⟳ Play Again
-          </button>
+          <div className="gameover-buttons">
+            <button className="btn" onClick={onRestart} type="button">
+              ⟳ Play Again
+            </button>
+            <button className="btn ghost" onClick={onMenu} type="button">
+              ☰ Main Menu
+            </button>
+          </div>
           <SettingsRow settings={settings} onToggleMusic={onToggleMusic} onToggleSfx={onToggleSfx} />
         </div>
       )}

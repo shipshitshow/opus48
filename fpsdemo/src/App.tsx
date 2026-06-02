@@ -7,11 +7,15 @@ import {
   clearScores,
   loadScores,
   loadSettings,
+  loadShop,
   saveScore,
   saveSettings,
+  saveShop,
   type ScoreEntry,
   type Settings,
+  type ShopState,
 } from './game/storage'
+import { SHOP_BY_ID, shopCost, runGold, type ShopId } from './game/survivors'
 import { MAGAZINE_SIZE, PLAYER_MAX_HEALTH, START_RESERVE, TOTAL_WAVES } from './game/constants'
 
 const INITIAL_STATE: HUDState = {
@@ -50,6 +54,12 @@ const INITIAL_STATE: HUDState = {
   connected: false,
   room: '',
   scoreboard: [],
+  survivors: false,
+  level: 1,
+  xp: 0,
+  xpToNext: 6,
+  build: [],
+  choices: [],
 }
 
 export default function App() {
@@ -58,6 +68,8 @@ export default function App() {
   const [hud, setHud] = useState<HUDState>(INITIAL_STATE)
   const [scores, setScores] = useState<ScoreEntry[]>(() => loadScores())
   const [settings, setSettings] = useState<Settings>(() => loadSettings())
+  const [shop, setShop] = useState<ShopState>(() => loadShop())
+  const [lastRunGold, setLastRunGold] = useState(0)
   const savedRef = useRef(false)
 
   useEffect(() => {
@@ -67,6 +79,7 @@ export default function App() {
     audio.setSfxEnabled(settings.sfx)
     const game = new Game(container, setHud)
     gameRef.current = game
+    game.setShopUpgrades(shop.tiers)
     game.start()
     if (import.meta.env.DEV) {
       ;(window as unknown as { __fpsGame?: Game; __fpsAudio?: typeof audio }).__fpsGame = game
@@ -79,7 +92,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Record a run on the leaderboard exactly once per game-over.
+  // Record a run on the leaderboard (and award Survivors gold) once per game-over.
   useEffect(() => {
     if (hud.status === 'gameover' && hud.outcome && !savedRef.current) {
       savedRef.current = true
@@ -93,10 +106,21 @@ export default function App() {
           date: Date.now(),
         }),
       )
+      if (hud.survivors) {
+        setShop((prev) => {
+          const earned = runGold(hud.kills, hud.level, hud.time, prev.tiers.greed ?? 0)
+          setLastRunGold(earned)
+          const next = { ...prev, gold: prev.gold + earned }
+          saveShop(next)
+          return next
+        })
+      } else {
+        setLastRunGold(0)
+      }
     } else if (hud.status !== 'gameover') {
       savedRef.current = false
     }
-  }, [hud.status, hud.outcome, hud.score, hud.kills, hud.headshots, hud.time])
+  }, [hud.status, hud.outcome, hud.score, hud.kills, hud.headshots, hud.time, hud.survivors, hud.level])
 
   const handleLock = useCallback(() => {
     audio.unlock()
@@ -133,6 +157,35 @@ export default function App() {
     gameRef.current?.startMultiplayer(room, name)
   }, [])
   const handleLeaveRoom = useCallback(() => gameRef.current?.leaveMultiplayer(true), [])
+  const handleStartCampaign = useCallback(() => {
+    audio.unlock()
+    gameRef.current?.startCampaign()
+  }, [])
+  const handleStartSurvivors = useCallback(() => {
+    audio.unlock()
+    gameRef.current?.startSurvivors()
+  }, [])
+  const handlePickUpgrade = useCallback((id: string) => {
+    audio.unlock()
+    gameRef.current?.pickUpgrade(id)
+  }, [])
+  const handleMenu = useCallback(() => gameRef.current?.returnToMenu(), [])
+  const handleBuyShop = useCallback((id: string) => {
+    setShop((prev) => {
+      const def = SHOP_BY_ID[id as ShopId]
+      if (!def) return prev
+      const tier = prev.tiers[id] ?? 0
+      if (tier >= def.max) return prev
+      const cost = shopCost(def, tier)
+      if (prev.gold < cost) return prev
+      const next: ShopState = { gold: prev.gold - cost, tiers: { ...prev.tiers, [id]: tier + 1 } }
+      saveShop(next)
+      gameRef.current?.setShopUpgrades(next.tiers)
+      audio.unlock()
+      audio.sfx('pickup')
+      return next
+    })
+  }, [])
 
   return (
     <div className="game-root" ref={containerRef}>
@@ -147,6 +200,13 @@ export default function App() {
         onClearScores={handleClearScores}
         onStartMultiplayer={handleStartMultiplayer}
         onLeaveRoom={handleLeaveRoom}
+        onStartCampaign={handleStartCampaign}
+        onStartSurvivors={handleStartSurvivors}
+        onPickUpgrade={handlePickUpgrade}
+        onMenu={handleMenu}
+        shop={shop}
+        lastRunGold={lastRunGold}
+        onBuyShop={handleBuyShop}
       />
     </div>
   )

@@ -22,6 +22,13 @@ export const FIRE_INTERVAL = 0.11 // seconds between shots (full-auto)
 export const WEAPON_DAMAGE = 34 // ~3 body shots to kill a base 100hp enemy
 export const HEADSHOT_MULTIPLIER = 2.2
 
+// Melee knife — always available (no ammo), the guaranteed fallback so you can
+// never be locked out of fighting when ammo runs dry. Works in every mode.
+export const MELEE_DAMAGE = 48
+export const MELEE_RANGE = 3.0
+export const MELEE_COOLDOWN = 0.5
+export const MELEE_ARC_DOT = 0.55 // cos(~57°): frontal cone, hits a small cluster
+
 // Enemies (base stats; waves scale these)
 export const ENEMY_MAX_HEALTH = 100
 export const ENEMY_SPEED_MIN = 2.6
