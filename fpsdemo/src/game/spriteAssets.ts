@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import type { WeaponId } from './constants'
+import type { PlayerAvatarId } from '../net/playerAvatars'
 
 import bossSpriteUrl from '../assets/sprites/boss.webp'
 import bossBackSpriteUrl from '../assets/sprites/boss-back.webp'
@@ -15,6 +16,18 @@ import enemyProjectileSpriteUrl from '../assets/sprites/projectile-enemy.webp'
 import ammoPickupSpriteUrl from '../assets/sprites/pickup-ammo.webp'
 import damagePickupSpriteUrl from '../assets/sprites/pickup-damage.webp'
 import healthPickupSpriteUrl from '../assets/sprites/pickup-health.webp'
+import playerHeavyBackSpriteUrl from '../assets/sprites/player-heavy-back.webp'
+import playerHeavyFrontSpriteUrl from '../assets/sprites/player-heavy-front.webp'
+import playerHeavySideSpriteUrl from '../assets/sprites/player-heavy-side.webp'
+import playerMedicBackSpriteUrl from '../assets/sprites/player-medic-back.webp'
+import playerMedicFrontSpriteUrl from '../assets/sprites/player-medic-front.webp'
+import playerMedicSideSpriteUrl from '../assets/sprites/player-medic-side.webp'
+import playerRangerBackSpriteUrl from '../assets/sprites/player-ranger-back.webp'
+import playerRangerFrontSpriteUrl from '../assets/sprites/player-ranger-front.webp'
+import playerRangerSideSpriteUrl from '../assets/sprites/player-ranger-side.webp'
+import playerScoutBackSpriteUrl from '../assets/sprites/player-scout-back.webp'
+import playerScoutFrontSpriteUrl from '../assets/sprites/player-scout-front.webp'
+import playerScoutSideSpriteUrl from '../assets/sprites/player-scout-side.webp'
 import cannonSpriteUrl from '../assets/sprites/weapon-cannon.webp'
 import rifleSpriteUrl from '../assets/sprites/weapon-rifle.webp'
 import shotgunSpriteUrl from '../assets/sprites/weapon-shotgun.webp'
@@ -67,6 +80,29 @@ export const PICKUP_SPRITE_TEXTURES = {
   ammo: loadSpriteTexture(ammoPickupSpriteUrl),
   damage: loadSpriteTexture(damagePickupSpriteUrl),
 } as const
+
+export const PLAYER_AVATAR_SPRITES: Record<PlayerAvatarId, { front: THREE.Texture; side: THREE.Texture; back: THREE.Texture }> = {
+  ranger: {
+    front: loadSpriteTexture(playerRangerFrontSpriteUrl),
+    side: loadSpriteTexture(playerRangerSideSpriteUrl),
+    back: loadSpriteTexture(playerRangerBackSpriteUrl),
+  },
+  heavy: {
+    front: loadSpriteTexture(playerHeavyFrontSpriteUrl),
+    side: loadSpriteTexture(playerHeavySideSpriteUrl),
+    back: loadSpriteTexture(playerHeavyBackSpriteUrl),
+  },
+  scout: {
+    front: loadSpriteTexture(playerScoutFrontSpriteUrl),
+    side: loadSpriteTexture(playerScoutSideSpriteUrl),
+    back: loadSpriteTexture(playerScoutBackSpriteUrl),
+  },
+  medic: {
+    front: loadSpriteTexture(playerMedicFrontSpriteUrl),
+    side: loadSpriteTexture(playerMedicSideSpriteUrl),
+    back: loadSpriteTexture(playerMedicBackSpriteUrl),
+  },
+}
 
 export const ARENA_TEXTURES = {
   floor: loadSpriteTexture(arenaFloorTextureUrl),

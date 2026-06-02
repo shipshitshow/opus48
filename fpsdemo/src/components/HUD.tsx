@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import type { HUDState } from '../game/types'
 import type { ScoreEntry, Settings, ShopState } from '../game/storage'
-import { SHOP_UPGRADES, shopCost } from '../game/survivors'
-import { MAP_PICKER } from '../game/maps'
+import { SHOP_UPGRADES, shopCost } from '../game/data/survivors'
+import { MAP_PICKER } from '../game/data/maps'
 import { PLAYER_AVATAR_OPTIONS, normalizePlayerAvatar, type PlayerAvatarId } from '../net/playerAvatars'
+import playerHeavyPreview from '../assets/sprites/player-heavy-front.webp'
+import playerMedicPreview from '../assets/sprites/player-medic-front.webp'
+import playerRangerPreview from '../assets/sprites/player-ranger-front.webp'
+import playerScoutPreview from '../assets/sprites/player-scout-front.webp'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Card } from '@/components/ui/card'
@@ -38,6 +42,12 @@ const STAT_LABEL = 'text-[11px] tracking-[0.12em] uppercase opacity-60'
 const STAT_VALUE = 'text-[22px] font-bold leading-[1.1]'
 const MENU_HEADING = 'text-[22px] font-extrabold tracking-[0.04em] mt-1 mb-3'
 const STAT_SUB = 'text-[11px] font-bold tracking-[0.04em] opacity-70 mt-px uppercase'
+const AVATAR_PREVIEWS: Record<PlayerAvatarId, string> = {
+  ranger: playerRangerPreview,
+  heavy: playerHeavyPreview,
+  scout: playerScoutPreview,
+  medic: playerMedicPreview,
+}
 
 function roomShareUrl(room: string): string {
   return `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(room)}`
@@ -133,7 +143,7 @@ function MultiplayerPanel({ onStart, initialRoom }: { onStart: (name: string, ro
     'pointer-events-auto text-[15px] text-fg bg-black/35 border border-white/20 rounded-lg px-3 py-[9px] min-w-[200px] focus:outline-none focus:border-accent'
   return (
     <div
-      className="pointer-events-auto mt-4 w-[min(560px,86vw)] bg-[rgba(255,77,109,0.06)] border border-[rgba(255,77,109,0.35)] rounded-[10px] px-4 py-[14px] text-center"
+      className="pointer-events-auto mt-4 w-[min(700px,88vw)] bg-[rgba(255,77,109,0.06)] border border-[rgba(255,77,109,0.35)] rounded-[10px] px-5 py-4 text-center"
       onClick={(e) => e.stopPropagation()}
     >
       <div className="text-[14px] tracking-[0.1em] uppercase text-[#ff8aa0] mb-[10px]">⚔ Multiplayer — PvP Arena</div>
@@ -150,31 +160,47 @@ function MultiplayerPanel({ onStart, initialRoom }: { onStart: (name: string, ro
           }}
         />
       </div>
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        {PLAYER_AVATAR_OPTIONS.map((option, idx) => (
-          <button
-            key={option.id}
-            type="button"
-            className={`pointer-events-auto cursor-pointer flex items-center gap-2 rounded-lg border px-3 py-2 text-left transition-[border-color,background,transform] hover:-translate-y-px ${
-              avatar === option.id ? 'border-accent bg-accent/15' : 'border-white/15 bg-black/25 hover:bg-white/10'
-            }`}
-            onClick={() => setAvatar(option.id)}
-          >
-            <span className={`relative block h-10 w-8 rounded-b-2xl border border-white/20 ${
-              idx === 0 ? 'bg-[#35e0ff]' : idx === 1 ? 'bg-[#ff4dcb]' : idx === 2 ? 'bg-[#ffb02e]' : 'bg-[#39d353]'
-            }`}>
-              <span className={`absolute left-1/2 top-[-9px] h-[18px] -translate-x-1/2 border border-black/70 bg-[#171b24] ${
-                option.id === 'heavy' ? 'w-7 rounded-[4px]' : option.id === 'scout' ? 'w-5 rounded-full' : 'w-6 rounded-full'
-              }`} />
-              <span className="absolute left-1/2 top-[-2px] h-[4px] w-5 -translate-x-1/2 rounded bg-white/90" />
-            </span>
-            <span className="min-w-0">
-              <b className="block text-[13px] leading-tight">{option.name}</b>
-              <small className="block text-[11px] opacity-65 leading-tight">{option.role}</small>
-              <i className="block text-[10px] not-italic opacity-55">P{idx + 1} tint preview</i>
-            </span>
-          </button>
-        ))}
+      <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
+        {PLAYER_AVATAR_OPTIONS.map((option) => {
+          const selected = avatar === option.id
+          return (
+            <button
+              key={option.id}
+              type="button"
+              className={`pointer-events-auto cursor-pointer flex min-h-[158px] flex-col items-center overflow-hidden rounded-lg border px-2.5 py-2.5 text-center transition-[border-color,background,transform,box-shadow] hover:-translate-y-px ${
+                selected
+                  ? 'border-accent bg-accent/15 shadow-[0_0_0_1px_rgba(0,216,255,0.18),0_10px_28px_-18px_rgba(0,216,255,0.9)]'
+                  : 'border-white/15 bg-black/25 hover:bg-white/10'
+              }`}
+              onClick={() => setAvatar(option.id)}
+              aria-pressed={selected}
+            >
+              <span
+                className={`relative flex h-[104px] w-full items-end justify-center overflow-hidden rounded-md border bg-black/35 ${
+                  selected ? 'border-accent/60' : 'border-white/10'
+                }`}
+              >
+                <span className={`absolute bottom-[8px] h-[24px] w-[74px] rounded-full blur-[10px] ${selected ? 'bg-accent/45' : 'bg-white/10'}`} />
+                <span className={`absolute bottom-[7px] h-[14px] w-[64px] rounded-full border ${selected ? 'border-accent/75' : 'border-white/15'}`} />
+                <img
+                  src={AVATAR_PREVIEWS[option.id]}
+                  alt=""
+                  className="relative z-[1] h-[118px] w-auto max-w-none object-contain [filter:drop-shadow(0_7px_7px_rgba(0,0,0,0.8))]"
+                  draggable={false}
+                />
+                {selected && (
+                  <span className="absolute right-2 top-2 z-[2] flex h-[18px] w-[18px] items-center justify-center rounded-full bg-accent text-[12px] font-extrabold text-ink">
+                    ✓
+                  </span>
+                )}
+              </span>
+              <span className="mt-2 min-w-0">
+                <b className="block text-[13px] leading-tight">{option.name}</b>
+                <small className="block text-[11px] opacity-65 leading-tight">{option.role}</small>
+              </span>
+            </button>
+          )
+        })}
       </div>
       <button
         type="button"

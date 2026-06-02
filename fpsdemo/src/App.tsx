@@ -16,7 +16,7 @@ import {
   type Settings,
   type ShopState,
 } from './game/storage'
-import { SHOP_BY_ID, shopCost, runGold, type ShopId } from './game/survivors'
+import { SHOP_BY_ID, shopCost, runGold, type ShopId } from './game/data/survivors'
 import { MAGAZINE_SIZE, PLAYER_MAX_HEALTH, START_RESERVE, TOTAL_WAVES } from './game/constants'
 
 const INITIAL_STATE: HUDState = {

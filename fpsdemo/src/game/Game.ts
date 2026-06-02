@@ -4,7 +4,7 @@ import { audio } from '../audio/AudioEngine'
 import { NetClient, type RemotePlayerInfo } from '../net/NetClient'
 import type { PlayerAvatarId } from '../net/playerAvatars'
 import { RemoteAvatar } from '../net/RemoteAvatar'
-import { Enemy, type EnemyShot } from './Enemy'
+import { Enemy, type EnemyShot } from './entities/Enemy'
 import {
   ARENA_HALF,
   BOSS_ATTACK_DAMAGE,
@@ -69,7 +69,7 @@ import {
   getMap,
   type ArenaMap,
   type ObstacleMat,
-} from './maps'
+} from './data/maps'
 import {
   BOLT_DMG,
   BOLT_SPEED,
@@ -94,7 +94,7 @@ import {
   UPGRADE_BY_ID,
   xpForLevel,
   type UpgradeId,
-} from './survivors'
+} from './data/survivors'
 import type { BuildEntry, GameStatus, HUDState, StateListener, UpgradeChoice } from './types'
 
 const ENEMY_COLORS = [0xff5a3c, 0xffb02e, 0xff3b6b, 0x9b5cff, 0x2ee6a6, 0x4d9bff]
@@ -1266,7 +1266,7 @@ export class Game {
 
   private updateMultiplayer(delta: number) {
     const quat = this.camera.quaternion
-    for (const r of this.remotePlayers.values()) r.update(delta, quat)
+    for (const r of this.remotePlayers.values()) r.update(delta, quat, this.camera.position)
     if (this.net) {
       this._euler.setFromQuaternion(quat, 'YXZ')
       this.net.sendState(

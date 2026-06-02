@@ -1,7 +1,9 @@
 import * as THREE from 'three'
+import { PLAYER_AVATAR_SPRITES } from '../game/spriteAssets'
 import { normalizePlayerAvatar, playerColorHex, type PlayerAvatarId } from './playerAvatars'
 
 const HB_WIDTH = 1.4
+type PlayerSpriteView = 'front' | 'side' | 'back'
 
 interface RemoteAvatarInfo {
   id: string
@@ -16,62 +18,27 @@ interface RemoteAvatarInfo {
   kills: number
 }
 
-interface AvatarBuild {
-  bodyRadius: number
-  bodyHeight: number
-  chest: [number, number, number]
-  shoulders: [number, number, number]
-  armRadius: number
-  helmet: 'round' | 'square' | 'visor' | 'medic'
-  pack?: boolean
-}
-
-const AVATAR_BUILDS: Record<PlayerAvatarId, AvatarBuild> = {
+const AVATAR_SCALES: Record<PlayerAvatarId, Record<PlayerSpriteView, [number, number]>> = {
   ranger: {
-    bodyRadius: 0.34,
-    bodyHeight: 0.95,
-    chest: [0.72, 0.58, 0.34],
-    shoulders: [0.34, 0.22, 0.32],
-    armRadius: 0.1,
-    helmet: 'visor',
-    pack: true,
+    front: [1.32, 2.34],
+    side: [1.54, 2.34],
+    back: [1.34, 2.34],
   },
   heavy: {
-    bodyRadius: 0.44,
-    bodyHeight: 1.05,
-    chest: [0.88, 0.68, 0.42],
-    shoulders: [0.46, 0.3, 0.42],
-    armRadius: 0.13,
-    helmet: 'square',
-    pack: true,
+    front: [1.55, 2.48],
+    side: [1.82, 2.48],
+    back: [1.56, 2.48],
   },
   scout: {
-    bodyRadius: 0.29,
-    bodyHeight: 0.9,
-    chest: [0.58, 0.52, 0.3],
-    shoulders: [0.26, 0.18, 0.28],
-    armRadius: 0.08,
-    helmet: 'round',
+    front: [1.14, 2.26],
+    side: [1.64, 2.26],
+    back: [1.14, 2.26],
   },
   medic: {
-    bodyRadius: 0.34,
-    bodyHeight: 0.95,
-    chest: [0.7, 0.58, 0.34],
-    shoulders: [0.32, 0.22, 0.32],
-    armRadius: 0.09,
-    helmet: 'medic',
-    pack: true,
+    front: [1.18, 2.32],
+    side: [1.7, 2.32],
+    back: [1.2, 2.32],
   },
-}
-
-function material(color: number | THREE.Color, emissive?: THREE.Color | number, intensity = 0): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({
-    color,
-    emissive: emissive ?? 0x000000,
-    emissiveIntensity: intensity,
-    roughness: 0.48,
-    metalness: 0.38,
-  })
 }
 
 /**
@@ -97,8 +64,14 @@ export class RemoteAvatar {
   private nameCanvas: HTMLCanvasElement
   private healthFill: THREE.Mesh
   private billboard = new THREE.Group()
-  private visual = new THREE.Group()
+  private spriteMat: THREE.SpriteMaterial
+  private sprite: THREE.Sprite
+  private spriteView: PlayerSpriteView = 'front'
+  private spriteFlip = 1
   private color: THREE.Color
+  private tint = new THREE.Color()
+  private slotRing: THREE.Mesh
+  private shadow: THREE.Mesh
 
   constructor(info: RemoteAvatarInfo) {
     this.id = info.id
@@ -119,9 +92,34 @@ export class RemoteAvatar {
     headHit.position.y = 1.95
     headHit.userData = { remoteId: info.id, part: 'head' }
 
-    this.group.add(bodyHit, headHit, this.visual)
+    this.spriteMat = new THREE.SpriteMaterial({
+      map: PLAYER_AVATAR_SPRITES[this.avatar].front,
+      color: 0xffffff,
+      transparent: true,
+      alphaTest: 0.055,
+      depthWrite: true,
+      toneMapped: false,
+    })
+    this.sprite = new THREE.Sprite(this.spriteMat)
+    this.sprite.center.set(0.5, 0)
+    this.sprite.position.y = 0
+
+    this.shadow = new THREE.Mesh(
+      new THREE.CircleGeometry(0.78, 32),
+      new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.32, depthWrite: false }),
+    )
+    this.shadow.rotation.x = -Math.PI / 2
+    this.shadow.position.y = 0.015
+
+    this.slotRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.58, 0.68, 40),
+      new THREE.MeshBasicMaterial({ color: this.color, transparent: true, opacity: 0.62, side: THREE.DoubleSide, depthWrite: false }),
+    )
+    this.slotRing.rotation.x = -Math.PI / 2
+    this.slotRing.position.y = 0.025
+
+    this.group.add(this.shadow, this.slotRing, bodyHit, headHit, this.sprite)
     this.hitMeshes.push(bodyHit, headHit)
-    this.rebuildVisual()
 
     this.nameCanvas = document.createElement('canvas')
     this.nameCanvas.width = 320
@@ -147,103 +145,55 @@ export class RemoteAvatar {
     this.target.copy(this.group.position)
     this.targetYaw = info.yaw
     this.group.rotation.y = info.yaw
+    this.applyTeamColor()
+    this.applySprite('front')
     this.redrawName()
     this.setHealth(info.health)
   }
 
-  private disposeVisual() {
-    this.visual.traverse((o) => {
-      if (o instanceof THREE.Mesh) {
-        o.geometry.dispose()
-        const m = o.material
-        if (Array.isArray(m)) m.forEach((x) => x.dispose())
-        else m.dispose()
-      }
-    })
-    this.visual.clear()
+  private applyTeamColor() {
+    this.color.setHex(playerColorHex(this.slot, this.id))
+    this.tint.setHex(0xffffff).lerp(this.color, 0.28)
+    this.spriteMat.color.copy(this.tint)
+    ;(this.slotRing.material as THREE.MeshBasicMaterial).color.copy(this.color)
   }
 
-  private rebuildVisual() {
-    this.disposeVisual()
-
-    const build = AVATAR_BUILDS[this.avatar]
-    const suit = material(0x171b24)
-    const armor = material(0x2a3140)
-    const accent = material(this.color, this.color.clone().multiplyScalar(0.45), 1.2)
-    const visor = material(0xf2f7ff, this.color, 1.8)
-    const light = material(0xffffff, this.color, 2.4)
-    const white = material(0xdbe6ef, this.color.clone().multiplyScalar(0.15), 0.4)
-
-    const body = new THREE.Mesh(new THREE.CapsuleGeometry(build.bodyRadius, build.bodyHeight, 8, 14), suit)
-    body.position.y = 1.0
-    body.castShadow = true
-
-    const chest = new THREE.Mesh(new THREE.BoxGeometry(...build.chest), this.avatar === 'medic' ? white : armor)
-    chest.position.set(0, 1.25, 0.02)
-    chest.castShadow = true
-
-    const chestCore = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.16, 0.045), accent)
-    chestCore.position.set(0, 1.28, 0.22)
-
-    const shoulderGeo = new THREE.BoxGeometry(...build.shoulders)
-    const shoulderL = new THREE.Mesh(shoulderGeo, armor)
-    shoulderL.position.set(-build.chest[0] * 0.56, 1.48, 0)
-    const shoulderR = new THREE.Mesh(shoulderGeo, armor)
-    shoulderR.position.set(build.chest[0] * 0.56, 1.48, 0)
-
-    const armGeo = new THREE.CapsuleGeometry(build.armRadius, 0.58, 5, 10)
-    const armL = new THREE.Mesh(armGeo, suit)
-    armL.position.set(-build.chest[0] * 0.66, 1.06, 0.02)
-    armL.rotation.z = 0.08
-    const armR = new THREE.Mesh(armGeo, suit)
-    armR.position.set(build.chest[0] * 0.66, 1.06, 0.02)
-    armR.rotation.z = -0.08
-
-    const legGeo = new THREE.CapsuleGeometry(build.bodyRadius * 0.34, 0.55, 5, 9)
-    const legL = new THREE.Mesh(legGeo, suit)
-    legL.position.set(-build.bodyRadius * 0.45, 0.38, 0)
-    const legR = new THREE.Mesh(legGeo, suit)
-    legR.position.set(build.bodyRadius * 0.45, 0.38, 0)
-
-    const helmet =
-      build.helmet === 'square'
-        ? new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.46, 0.5), armor)
-        : new THREE.Mesh(new THREE.SphereGeometry(build.helmet === 'round' ? 0.29 : 0.33, 16, 12), armor)
-    helmet.position.y = 1.93
-    helmet.castShadow = true
-
-    const visorBar = new THREE.Mesh(new THREE.BoxGeometry(build.helmet === 'square' ? 0.42 : 0.36, 0.11, 0.055), visor)
-    visorBar.position.set(0, 1.95, 0.31)
-
-    const antenna = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.32, 0.045), accent)
-    antenna.position.set(build.helmet === 'round' ? 0.2 : 0.27, 2.28, 0)
-
-    const gun = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, this.avatar === 'heavy' ? 0.72 : 0.58), material(0x10131a))
-    gun.position.set(0.34, 1.17, -0.34)
-    gun.rotation.y = -0.08
-
-    const muzzle = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.08), light)
-    muzzle.position.set(0.34, 1.17, -0.72)
-
-    this.visual.add(body, chest, chestCore, shoulderL, shoulderR, armL, armR, legL, legR, helmet, visorBar, antenna, gun, muzzle)
-
-    if (build.pack) {
-      const pack = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.56, 0.2), armor)
-      pack.position.set(0, 1.2, -0.28)
-      this.visual.add(pack)
+  private applySprite(view: PlayerSpriteView = this.spriteView, flip = this.spriteFlip, elapsed = 0, moving = false) {
+    const texture = PLAYER_AVATAR_SPRITES[this.avatar][view]
+    if (this.spriteMat.map !== texture) {
+      this.spriteMat.map = texture
+      this.spriteMat.needsUpdate = true
     }
 
-    if (this.avatar === 'medic') {
-      const crossV = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.26, 0.055), accent)
-      const crossH = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.07, 0.055), accent)
-      crossV.position.set(0, 1.3, 0.25)
-      crossH.position.set(0, 1.3, 0.255)
-      this.visual.add(crossV, crossH)
-    }
+    this.spriteView = view
+    this.spriteFlip = flip
 
-    for (const child of this.visual.children) {
-      if (child instanceof THREE.Mesh) child.castShadow = true
-    }
+    const [baseW, baseH] = AVATAR_SCALES[this.avatar][view]
+    const step = moving ? Math.sin(elapsed * 9) : 0
+    const squash = Math.abs(step)
+    this.spriteMat.rotation = moving ? step * 0.025 * flip : 0
+    this.sprite.scale.set(baseW * (1 + squash * 0.018) * flip, baseH * (1 - squash * 0.022), 1)
+    this.sprite.position.y = moving ? squash * 0.025 : 0
+  }
+
+  private chooseSpriteFrame(cameraPos: THREE.Vector3): { view: PlayerSpriteView; flip: number } {
+    const pos = this.group.position
+    const vx = cameraPos.x - pos.x
+    const vz = cameraPos.z - pos.z
+    const dist = Math.hypot(vx, vz)
+    if (dist < 0.0001) return { view: this.spriteView, flip: this.spriteFlip }
+
+    const toCameraX = vx / dist
+    const toCameraZ = vz / dist
+    const yaw = this.group.rotation.y
+    const forwardX = -Math.sin(yaw)
+    const forwardZ = -Math.cos(yaw)
+    const dot = forwardX * toCameraX + forwardZ * toCameraZ
+    if (dot > 0.48) return { view: 'front', flip: 1 }
+    if (dot < -0.48) return { view: 'back', flip: 1 }
+
+    const cross = forwardX * toCameraZ - forwardZ * toCameraX
+    return { view: 'side', flip: cross >= 0 ? 1 : -1 }
   }
 
   setTarget(x: number, y: number, z: number, yaw: number) {
@@ -261,15 +211,15 @@ export class RemoteAvatar {
 
   setMeta(name: string, kills: number, avatar?: string, slot?: number) {
     const nextAvatar = avatar === undefined ? this.avatar : normalizePlayerAvatar(avatar)
-    const nextSlot = slot || this.slot
+    const nextSlot = slot ?? this.slot
     const visualChanged = nextAvatar !== this.avatar || nextSlot !== this.slot
     this.name = name
     this.kills = kills
     this.avatar = nextAvatar
     this.slot = nextSlot
     if (visualChanged) {
-      this.color = new THREE.Color(playerColorHex(this.slot, this.id))
-      this.rebuildVisual()
+      this.applyTeamColor()
+      this.applySprite()
     }
     this.redrawName()
   }
@@ -290,29 +240,45 @@ export class RemoteAvatar {
     this.nameTex.needsUpdate = true
   }
 
-  update(delta: number, cameraQuat: THREE.Quaternion) {
+  update(delta: number, cameraQuat: THREE.Quaternion, cameraPos: THREE.Vector3) {
+    const beforeX = this.group.position.x
+    const beforeZ = this.group.position.z
     const k = 1 - Math.pow(0.001, delta)
     this.group.position.lerp(this.target, k)
     let dy = this.targetYaw - this.group.rotation.y
     while (dy > Math.PI) dy -= Math.PI * 2
     while (dy < -Math.PI) dy += Math.PI * 2
     this.group.rotation.y += dy * k
+
+    const frame = this.chooseSpriteFrame(cameraPos)
+    const moved = Math.hypot(this.group.position.x - beforeX, this.group.position.z - beforeZ) > 0.002
+    this.applySprite(frame.view, frame.flip, performance.now() * 0.001, moved)
+
     this.billboard.quaternion.copy(cameraQuat)
     this.nameSprite.quaternion.copy(cameraQuat)
   }
 
   dispose() {
-    this.disposeVisual()
-    this.group.traverse((o) => {
-      if (o instanceof THREE.Mesh) {
-        o.geometry.dispose()
-        const m = o.material
-        if (Array.isArray(m)) m.forEach((x) => x.dispose())
-        else m.dispose()
-      } else if (o instanceof THREE.Sprite) {
-        o.material.map?.dispose()
-        o.material.dispose()
+    for (const hit of this.hitMeshes) {
+      hit.geometry.dispose()
+      const mat = hit.material
+      if (Array.isArray(mat)) mat.forEach((m) => m.dispose())
+      else mat.dispose()
+    }
+    for (const child of [...this.billboard.children]) {
+      if (child instanceof THREE.Mesh) {
+        child.geometry.dispose()
+        const mat = child.material
+        if (Array.isArray(mat)) mat.forEach((m) => m.dispose())
+        else mat.dispose()
       }
-    })
+    }
+    this.shadow.geometry.dispose()
+    ;(this.shadow.material as THREE.Material).dispose()
+    this.slotRing.geometry.dispose()
+    ;(this.slotRing.material as THREE.Material).dispose()
+    this.spriteMat.dispose()
+    this.nameTex.dispose()
+    this.nameSprite.material.dispose()
   }
 }

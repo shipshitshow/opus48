@@ -20,8 +20,8 @@ import {
   ENEMY_SEPARATION,
   ENEMY_SPEED_MIN,
   ENEMY_SPEED_MAX,
-} from './constants'
-import { ENEMY_SPRITE_TEXTURES } from './spriteAssets'
+} from '../constants'
+import { ENEMY_SPRITE_TEXTURES } from '../spriteAssets'
 
 const HEALTHBAR_WIDTH = 1.3
 type EnemySpriteKind = 'melee' | 'ranged' | 'boss'
