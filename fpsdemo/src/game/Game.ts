@@ -153,6 +153,7 @@ interface Projectile {
   fromBoss: boolean
   baseScale: number
   spin: number
+  owner: Enemy | null
 }
 
 export class Game {
@@ -667,6 +668,16 @@ export class Game {
     const wasBoss = enemy.isBoss
     const spec = WEAPONS[this.activeWeapon]
     this.kills++
+    // a dead mob's in-flight projectiles should fizzle out
+    this.removeProjectilesFrom(enemy)
+
+    if (this.survivors) {
+      this.spawnDeathPop(enemy.position.clone(), wasBoss ? 0xff2d55 : 0xffd166, wasBoss ? 2.0 : 0.8)
+      this.dropXpGem(enemy.position.clone(), this.enemyXp.get(enemy) ?? SURV_XP_GEM_VALUE)
+      this.reserve = Math.min(spec.reserveCap, this.reserve + 3) // keep the main gun fed
+      return
+    }
+
     this.killSeq++
     if (wasBoss) {
       this.score += BOSS_SCORE
@@ -926,6 +937,10 @@ export class Game {
 
   requestLock() {
     if (this.status !== 'pointerlock-needed' && this.status !== 'paused') return
+    this.lockPointer()
+  }
+
+  private lockPointer() {
     try {
       const res: unknown = this.renderer.domElement.requestPointerLock()
       if (res && typeof (res as Promise<void>).catch === 'function') (res as Promise<void>).catch(() => {})
@@ -1605,8 +1620,9 @@ export class Game {
     this._dir.x = Number(this.move.right) - Number(this.move.left)
     this._dir.normalize()
 
-    if (this.move.forward || this.move.back) this.velocity.z -= this._dir.z * MOVE_ACCEL * delta
-    if (this.move.left || this.move.right) this.velocity.x -= this._dir.x * MOVE_ACCEL * delta
+    const accel = MOVE_ACCEL * this.statMoveMul
+    if (this.move.forward || this.move.back) this.velocity.z -= this._dir.z * accel * delta
+    if (this.move.left || this.move.right) this.velocity.x -= this._dir.x * accel * delta
 
     this.controls.moveRight(-this.velocity.x * delta)
     this.controls.moveForward(-this.velocity.z * delta)
@@ -1650,7 +1666,7 @@ export class Game {
   private shoot() {
     const spec = WEAPONS[this.activeWeapon]
     this.ammo--
-    this.fireCooldown = spec.fireInterval
+    this.fireCooldown = spec.fireInterval / this.statFireRateMul
     this.weaponRecoil = Math.min(0.16, this.weaponRecoil + (spec.pellets > 1 ? 0.12 : 0.05))
     audio.sfx('shoot')
 
@@ -1665,14 +1681,16 @@ export class Game {
     this._right.crossVectors(this._fwd, this._worldUp).normalize()
     this._up.crossVectors(this._right, this._fwd).normalize()
 
-    const dmgMult = this.damageBoostTimer > 0 ? DAMAGE_BOOST_MULT : 1
+    const dmgMult = (this.damageBoostTimer > 0 ? DAMAGE_BOOST_MULT : 1) * this.statDamageMul
     const muzzleWorld = this.muzzleFlash.getWorldPosition(new THREE.Vector3())
+    const pellets = spec.pellets + (this.survivors ? this.statMultishot : 0)
+    const spread = pellets > 1 ? Math.max(spec.spread, 0.03) : spec.spread
 
-    for (let p = 0; p < spec.pellets; p++) {
+    for (let p = 0; p < pellets; p++) {
       const dir = this._fwd.clone()
-      if (spec.spread > 0) {
-        dir.addScaledVector(this._right, (Math.random() * 2 - 1) * spec.spread)
-        dir.addScaledVector(this._up, (Math.random() * 2 - 1) * spec.spread)
+      if (spread > 0) {
+        dir.addScaledVector(this._right, (Math.random() * 2 - 1) * spread)
+        dir.addScaledVector(this._up, (Math.random() * 2 - 1) * spread)
         dir.normalize()
       }
       this.raycaster.set(this._origin, dir)
@@ -1700,7 +1718,8 @@ export class Game {
         } else if (ud.enemy) {
           if (!ud.enemy.alive) continue
           const headshot = ud.part === 'head'
-          const dmg = spec.damage * dmgMult * (headshot ? HEADSHOT_MULTIPLIER : 1)
+          const crit = this.statCrit > 0 && Math.random() < this.statCrit ? 2 : 1
+          const dmg = spec.damage * dmgMult * crit * (headshot ? HEADSHOT_MULTIPLIER : 1)
           const res = ud.enemy.takeDamage(dmg, headshot)
           endPoint = h.point.clone()
           if (res.blocked) {
@@ -1767,7 +1786,7 @@ export class Game {
       if (!enemy.alive) continue
       const tick = enemy.update(delta, elapsed, playerPos, this.enemies, quat)
       damageToPlayer += tick.melee
-      for (const shot of tick.shots) this.spawnProjectile(shot)
+      for (const shot of tick.shots) this.spawnProjectile(shot, enemy)
       this.pushOutOfObstacles(enemy.position, enemy.radius)
     }
     if (damageToPlayer > 0) this.damagePlayer(damageToPlayer)
@@ -1783,7 +1802,7 @@ export class Game {
 
   // -------------------------------------------------------------- projectiles
 
-  private spawnProjectile(shot: EnemyShot) {
+  private spawnProjectile(shot: EnemyShot, owner: Enemy | null = null) {
     const color = shot.fromBoss ? 0xff2d6a : 0xff8a3c
     const mesh = new THREE.Sprite(new THREE.SpriteMaterial({
       map: shot.fromBoss ? PROJECTILE_SPRITE_TEXTURES.boss : PROJECTILE_SPRITE_TEXTURES.enemy,
@@ -1806,7 +1825,15 @@ export class Game {
       fromBoss: shot.fromBoss,
       baseScale,
       spin: (Math.random() < 0.5 ? -1 : 1) * (shot.fromBoss ? 3.8 : 5.5),
+      owner,
     })
+  }
+
+  /** Despawn any in-flight projectiles fired by a given enemy (it just died). */
+  private removeProjectilesFrom(enemy: Enemy) {
+    for (let i = this.projectiles.length - 1; i >= 0; i--) {
+      if (this.projectiles[i].owner === enemy) this.removeProjectile(i)
+    }
   }
 
   private updateProjectiles(delta: number) {
@@ -2002,9 +2029,7 @@ export class Game {
     }
   }
 
-  restart() {
-    this.resetPlayer()
-
+  private clearTransientFx() {
     for (const t of this.tracers) {
       this.scene.remove(t.line)
       t.line.geometry.dispose()
@@ -2019,12 +2044,33 @@ export class Game {
     this.pops = []
     this.clearProjectiles()
     while (this.pickups.length) this.removePickup(this.pickups.length - 1)
+  }
 
-    this.startWaveSystem()
-
+  /** "Play Again" — replays the current mode. */
+  restart() {
+    this.resetPlayer()
+    this.clearTransientFx()
+    if (this.survivors) {
+      this.initSurvivorsRun()
+    } else {
+      this.startWaveSystem()
+    }
     this.status = 'pointerlock-needed'
     this.emit()
     this.requestLock()
+  }
+
+  /** Return to the main menu (drops any mode, no auto-lock). */
+  returnToMenu() {
+    this.leaveMultiplayer(false)
+    this.survivors = false
+    this.recomputeStats()
+    this.resetPlayer()
+    this.clearTransientFx()
+    this.clearSurvivorsEntities()
+    this.startWaveSystem()
+    this.status = 'pointerlock-needed'
+    this.emit()
   }
 
   private gameOver(outcome: 'win' | 'dead') {
@@ -2074,7 +2120,7 @@ export class Game {
     const state: HUDState = {
       status: this.status,
       playerHealth: Math.round(this.health),
-      maxPlayerHealth: PLAYER_MAX_HEALTH,
+      maxPlayerHealth: this.maxHealthValue,
       ammo: this.ammo,
       magazineSize: spec.magazineSize,
       reserve: this.reserve,
@@ -2107,6 +2153,12 @@ export class Game {
       connected: this.connected,
       room: this.roomName,
       scoreboard: this.multiplayer ? this.buildScoreboard() : [],
+      survivors: this.survivors,
+      level: this.level,
+      xp: Math.floor(this.xp),
+      xpToNext: this.xpToNext,
+      build: this.survivors ? this.buildList() : [],
+      choices: this.status === 'levelup' ? this.choices : [],
     }
     this.listener(state)
   }
